@@ -26,6 +26,17 @@
 
 ---
 
+## Ajustes após a revisão
+
+| Ponto da revisão | O que mudou | Onde |
+|---|---|---|
+| `inventario.py` devolvia `conforme` para dado não coletado (VM sem systemd e sem `ss`) | O systemd passa a ser detectado por `/run/systemd/system`; todo coletor confere o código de saída e o que não foi coletado vira `nao_verificado` com motivo. 13 testes, dos quais 10 falham na versão anterior, e uma VM de teste sem systemd e sem `ss` | [`ticket-03-inventario-de-vm/ferramenta/`](./ticket-03-inventario-de-vm/ferramenta/) · [`spec/arquivo-final.md` §6](./ticket-03-inventario-de-vm/spec/arquivo-final.md) |
+| Comparação com e sem skill sem número de tokens | 12 sessões medidas (3 por caso e variante) com tokens, custo e tool calls; a conclusão foi reescrita a partir dos números | [`ticket-02-triagem-no-cluster/saida/comparacao-com-sem-skill.md`](./ticket-02-triagem-no-cluster/saida/comparacao-com-sem-skill.md) · [`saida/medicao-tokens/`](./ticket-02-triagem-no-cluster/saida/medicao-tokens/) |
+| Configuração do `mcp-server-kubernetes` em modo não destrutivo não versionada | `.mcp.json` com `ALLOW_ONLY_NON_DESTRUCTIVE_TOOLS=true` e contexto fixado, mais `.claude/settings.json` liberando só leitura | [`ticket-02-triagem-no-cluster/.mcp.json`](./ticket-02-triagem-no-cluster/.mcp.json) · [`.claude/settings.json`](./ticket-02-triagem-no-cluster/.claude/settings.json) |
+| Repositório misturava os Desafios 1 e 2 | Este repositório contém só os quatro tickets do Desafio 3, com o histórico de commits preservado | — |
+
+---
+
 ## Agentes e Modelos Utilizados
 
 - **Agente de Execução dos Tickets:** Claude Code (Anthropic)
