@@ -1,0 +1,11 @@
+# Ferramentas expostas pelo mcp-server-kubernetes com a configuração versionada
+# Gerado em 2026-10-08T22:08:55Z iniciando o servidor a partir de .mcp.json e chamando tools/list via stdio
+
+server: {'name': 'kubernetes', 'version': '4.1.9'}
+tools: explain_resource, install_helm_chart, kubectl_apply, kubectl_context, kubectl_create, kubectl_describe, kubectl_get, kubectl_logs, kubectl_patch, kubectl_reconnect, kubectl_rollout, kubectl_scale, list_api_resources, ping, port_forward, stop_port_forward, upgrade_helm_chart
+  kubectl_delete: bloqueada
+  kubectl_generic: bloqueada
+  exec_in_pod: bloqueada
+  cleanup: bloqueada
+  node_management: bloqueada
+  uninstall_helm_chart: bloqueada

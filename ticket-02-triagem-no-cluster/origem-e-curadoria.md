@@ -69,6 +69,12 @@ Ferramentas de escrita (`kubectl_apply`, `kubectl_delete`, `kubectl_create`, `ku
 
 **Por que não basta dizer "não escreva"?** Porque uma instrução negativa ("não faça X") é mais fraca do que uma prescrição positiva que nunca inclui X. Se a skill apenas dissesse "não aplique correções", o agente poderia decidir que "uma pequena correção óbvia" é uma exceção razoável. Como a skill nunca menciona ferramentas de escrita, não há ambiguidade para interpretar.
 
+**A configuração do servidor MCP reforça o limite em três camadas** (versionadas em [`.mcp.json`](./.mcp.json) e [`.claude/settings.json`](./.claude/settings.json)):
+
+1. **Servidor em modo não destrutivo** — `ALLOW_ONLY_NON_DESTRUCTIVE_TOOLS=true` faz o `mcp-server-kubernetes` nem expor `kubectl_delete`, `kubectl_generic`, `exec_in_pod`, `cleanup`, `node_management` e `uninstall_helm_chart` (ver [`saida/evidencia-mcp-nao-destrutivo.txt`](./saida/evidencia-mcp-nao-destrutivo.txt)).
+2. **Permissões do Claude Code** — o modo não destrutivo ainda expõe ferramentas de criação/alteração (`kubectl_apply`, `kubectl_patch`, `kubectl_scale`, `kubectl_rollout`, Helm, `port_forward`) e `kubectl_context`. Essas ficam em `deny`; só `kubectl_get`, `kubectl_describe` e `kubectl_logs` ficam em `allow`, as mesmas três que a skill usa.
+3. **Contexto fixado** — `K8S_CONTEXT=kind-metacortex-lab` impede que a triagem rode no cluster que estiver ativo por acaso no kubeconfig do operador; negar `kubectl_context` impede o agente de trocá-lo.
+
 **Formato do relatório reforça o limite**: a saída da triagem tem o campo `AÇÃO SUGERIDA` — não "CORREÇÃO APLICADA". O nome do campo sinaliza que a ação é para o time, não para o agente.
 
 ---
