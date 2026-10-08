@@ -20,6 +20,8 @@ Códigos de saída:
   3  — erro interno (baseline inválido, argumento ausente)
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import re
@@ -89,35 +91,41 @@ class Coletor:
     def _run(self, cmd: str) -> tuple[str, int]:
         return self._ssh.executar(cmd)
 
-    def so(self) -> dict:
-        saida, _ = self._run('. /etc/os-release && echo "$ID $VERSION_ID"')
+    # Regra geral da coleta: comando que falha (exit != 0) ou não existe
+    # devolve None — nunca um valor vazio que possa ser lido como "conforme".
+    # A auditoria transforma None em nao_verificado com o motivo.
+
+    def so(self) -> dict | None:
+        saida, codigo = self._run('. /etc/os-release && echo "$ID $VERSION_ID"')
         partes = saida.split(None, 1)
-        return {
-            "distribuicao": partes[0] if partes else "desconhecido",
-            "versao": partes[1].strip() if len(partes) > 1 else "desconhecida",
-        }
+        if codigo != 0 or len(partes) < 2:
+            return None
+        return {"distribuicao": partes[0], "versao": partes[1].strip()}
 
-    def kernel(self) -> dict:
-        saida, _ = self._run("uname -r")
-        return {"versao": saida or "desconhecida"}
+    def kernel(self) -> dict | None:
+        saida, codigo = self._run("uname -r")
+        if codigo != 0 or not saida:
+            return None
+        return {"versao": saida}
 
-    def servicos(self) -> tuple[list[dict], bool]:
-        """Retorna (lista_servicos, systemd_disponivel)."""
+    def servicos(self) -> list[dict] | None:
+        """Lista unidades ativas. None se o systemd não é o init em execução."""
+        # /run/systemd/system só existe quando o systemd é o PID 1 (mesmo
+        # teste do sd_booted()). O exit code de `systemctl is-system-running`
+        # não serve: sem systemd em execução ele responde "offline" com exit 1,
+        # o mesmo código de "degraded".
+        _, codigo = self._run("test -d /run/systemd/system")
+        if codigo != 0:
+            return None
+
         lista = []
-        # Verificar se systemd está disponível
-        _, codigo = self._run("systemctl is-system-running 2>/dev/null")
-        if codigo not in (0, 1, 3, 4):
-            # Códigos 0=running, 1=degraded, 3=not-running, 4=unknown são válidos
-            # Qualquer outro indica systemd ausente
-            _, codigo2 = self._run("systemctl --version 2>/dev/null")
-            if codigo2 != 0:
-                return [], False
-
         for tipo in ("service", "socket"):
-            saida, _ = self._run(
+            saida, codigo = self._run(
                 f"systemctl list-units --type={tipo} --state=active "
                 f"--no-legend --plain --no-pager 2>/dev/null"
             )
+            if codigo != 0:
+                return None
             for linha in saida.splitlines():
                 partes = linha.split()
                 if not partes:
@@ -125,10 +133,12 @@ class Coletor:
                 nome = partes[0]
                 if nome.endswith(f".{tipo}"):
                     lista.append({"nome": nome, "tipo": tipo, "estado": "active"})
-        return lista, True
+        return lista
 
-    def swap(self) -> dict:
-        saida, _ = self._run("cat /proc/swaps")
+    def swap(self) -> dict | None:
+        saida, codigo = self._run("cat /proc/swaps")
+        if codigo != 0:
+            return None
         linhas = [l for l in saida.splitlines() if l and not l.startswith("Filename")]
         if not linhas:
             return {"habilitado": False, "tamanho": None}
@@ -145,8 +155,11 @@ class Coletor:
         tamanho = f"{gb:.0f}G" if gb >= 1 else f"{mb:.0f}M"
         return {"habilitado": True, "tamanho": tamanho}
 
-    def portas(self) -> list[dict]:
-        saida, _ = self._run("ss -tlnp 2>/dev/null")
+    def portas(self) -> list[dict] | None:
+        """Portas TCP em LISTEN. None se o `ss` não existe ou falha."""
+        saida, codigo = self._run("ss -tlnp 2>/dev/null")
+        if codigo != 0:
+            return None
         resultado = []
         for linha in saida.splitlines():
             partes = linha.split()
@@ -170,8 +183,14 @@ class Coletor:
             resultado.append({"porta": porta, "bind": bind, "processo": processo})
         return resultado
 
-    def chaves_ssh(self) -> list[dict]:
-        saida, _ = self._run("cat ~/.ssh/authorized_keys 2>/dev/null")
+    def chaves_ssh(self) -> list[dict] | None:
+        """Chaves do authorized_keys. [] se o arquivo não existe; None se não foi possível lê-lo."""
+        _, existe = self._run("test -e ~/.ssh/authorized_keys")
+        if existe != 0:
+            return []
+        saida, codigo = self._run("cat ~/.ssh/authorized_keys 2>/dev/null")
+        if codigo != 0:
+            return None
         chaves = []
         for linha in saida.splitlines():
             linha = linha.strip()
@@ -223,7 +242,7 @@ class Coletor:
         return {"sincronizado": sincronizado, "mecanismo": mecanismo}
 
     def coletar_tudo(self, host_address: str) -> dict:
-        lista_svc, systemd_ok = self.servicos()
+        lista_svc = self.servicos()
         return {
             "host": {
                 "endereco": host_address,
@@ -240,7 +259,6 @@ class Coletor:
                 "ssh": self.ssh_config(),
                 "ntp": self.ntp(),
             },
-            "_meta": {"systemd_disponivel": systemd_ok},
         }
 
 
@@ -255,11 +273,14 @@ def _versao_tuple(v: str) -> tuple:
 
 
 def auditar(baseline: dict, dados: dict) -> list[dict]:
-    """Compara inventário com baseline. Retorna lista de entradas de conformidade."""
+    """Compara inventário com baseline. Retorna lista de entradas de conformidade.
+
+    Todo dado que a coleta devolveu como None vira nao_verificado — a ausência
+    de dado nunca é tratada como conformidade.
+    """
     esperado = baseline.get("esperado", {})
     severidades = baseline.get("severidade", {})
     inv = dados["inventario"]
-    systemd_ok = dados.get("_meta", {}).get("systemd_disponivel", True)
 
     def sev(regra: str) -> str:
         for nivel, regras in severidades.items():
@@ -278,34 +299,39 @@ def auditar(baseline: dict, dados: dict) -> list[dict]:
 
     resultado = []
 
-    # ── so.distribuicao ──
+    # ── so.distribuicao / so.versao_minima ──
     dist_esp = esperado.get("so", {}).get("distribuicao")
-    dist_enc = inv["so"]["distribuicao"]
-    resultado.append(ok("so.distribuicao", dist_esp, dist_enc)
-                     if dist_enc == dist_esp
-                     else desvio("so.distribuicao", dist_esp, dist_enc))
-
-    # ── so.versao_minima ──
     versao_min = esperado.get("so", {}).get("versao_minima")
-    versao_enc = inv["so"]["versao"]
-    conforme_v = _versao_tuple(versao_enc) >= _versao_tuple(versao_min)
-    resultado.append(ok("so.versao_minima", versao_min, versao_enc)
-                     if conforme_v
-                     else desvio("so.versao_minima", versao_min, versao_enc))
+    so = inv["so"]
+    if so is None:
+        motivo = "/etc/os-release nao legivel"
+        resultado.append(nv("so.distribuicao", dist_esp, motivo))
+        resultado.append(nv("so.versao_minima", versao_min, motivo))
+    else:
+        resultado.append(ok("so.distribuicao", dist_esp, so["distribuicao"])
+                         if so["distribuicao"] == dist_esp
+                         else desvio("so.distribuicao", dist_esp, so["distribuicao"]))
+        resultado.append(ok("so.versao_minima", versao_min, so["versao"])
+                         if _versao_tuple(so["versao"]) >= _versao_tuple(versao_min)
+                         else desvio("so.versao_minima", versao_min, so["versao"]))
 
     # ── kernel.versao_minima ──
     kernel_min = esperado.get("kernel", {}).get("versao_minima")
-    kernel_enc = inv["kernel"]["versao"]
-    conforme_k = _versao_tuple(kernel_enc) >= _versao_tuple(kernel_min)
-    resultado.append(ok("kernel.versao_minima", kernel_min, kernel_enc)
-                     if conforme_k
-                     else desvio("kernel.versao_minima", kernel_min, kernel_enc))
+    if inv["kernel"] is None:
+        resultado.append(nv("kernel.versao_minima", kernel_min, "uname -r falhou"))
+    else:
+        kernel_enc = inv["kernel"]["versao"]
+        resultado.append(ok("kernel.versao_minima", kernel_min, kernel_enc)
+                         if _versao_tuple(kernel_enc) >= _versao_tuple(kernel_min)
+                         else desvio("kernel.versao_minima", kernel_min, kernel_enc))
 
-    # ── servicos.ativos ──
-    servicos_enc = {s["nome"] for s in inv["servicos"]}
+    # ── servicos.ativos / servicos.proibidos ──
+    servicos = inv["servicos"]
+    motivo_svc = "systemd nao disponivel ou nao acessivel"
+    servicos_enc = {s["nome"] for s in servicos} if servicos is not None else set()
     for svc in esperado.get("servicos", {}).get("ativos", []):
-        if not systemd_ok:
-            resultado.append(nv("servicos.ativos", f"{svc} ativo", "systemd nao disponivel ou nao acessivel"))
+        if servicos is None:
+            resultado.append(nv("servicos.ativos", f"{svc} ativo", motivo_svc))
             continue
         nome_full = svc if "." in svc else f"{svc}.service"
         presente = nome_full in servicos_enc or svc in servicos_enc
@@ -313,10 +339,9 @@ def auditar(baseline: dict, dados: dict) -> list[dict]:
                          if presente
                          else desvio("servicos.ativos", f"{svc} ativo", "ausente"))
 
-    # ── servicos.proibidos ──
     for svc in esperado.get("servicos", {}).get("proibidos", []):
-        if not systemd_ok:
-            resultado.append(nv("servicos.proibidos", f"{svc} inativo", "systemd nao disponivel ou nao acessivel"))
+        if servicos is None:
+            resultado.append(nv("servicos.proibidos", f"{svc} inativo", motivo_svc))
             continue
         nome_full = svc if "." in svc else f"{svc}.socket"
         presente = nome_full in servicos_enc or svc in servicos_enc
@@ -326,78 +351,88 @@ def auditar(baseline: dict, dados: dict) -> list[dict]:
 
     # ── swap.habilitado ──
     swap_esp = esperado.get("swap", {}).get("habilitado")
-    swap_enc = inv["swap"]["habilitado"]
-    tamanho = inv["swap"].get("tamanho")
-    enc_str = f"true ({tamanho})" if swap_enc and tamanho else swap_enc
-    resultado.append(ok("swap.habilitado", swap_esp, swap_enc)
-                     if swap_enc == swap_esp
-                     else desvio("swap.habilitado", swap_esp, enc_str))
-
-    # ── portas_em_escuta.publicas_permitidas ──
-    publicas_perm = set(esperado.get("portas_em_escuta", {}).get("publicas_permitidas", []))
-    WILDCARDS = {"0.0.0.0", "::", "*", ""}
-    portas_pub = [p for p in inv["portas_em_escuta"] if p["bind"] in WILDCARDS]
-    nao_perm = [p for p in portas_pub if p["porta"] not in publicas_perm]
-    if nao_perm:
-        enc = ", ".join(f"{p['porta']} em {p['bind']}" for p in nao_perm)
-        resultado.append(desvio(
-            "portas_em_escuta.publicas_permitidas",
-            f"apenas {sorted(publicas_perm)} públicas",
-            f"não permitidas expostas: {enc}",
-        ))
+    if inv["swap"] is None:
+        resultado.append(nv("swap.habilitado", swap_esp, "/proc/swaps nao legivel"))
     else:
-        resultado.append(ok(
-            "portas_em_escuta.publicas_permitidas",
-            f"apenas {sorted(publicas_perm)} públicas",
-            "nenhuma porta não autorizada em endereço público",
-        ))
+        swap_enc = inv["swap"]["habilitado"]
+        tamanho = inv["swap"].get("tamanho")
+        enc_str = f"true ({tamanho})" if swap_enc and tamanho else swap_enc
+        resultado.append(ok("swap.habilitado", swap_esp, swap_enc)
+                         if swap_enc == swap_esp
+                         else desvio("swap.habilitado", swap_esp, enc_str))
 
-    # ── portas_em_escuta.somente_rede_interna ──
-    somente_int = set(esperado.get("portas_em_escuta", {}).get("somente_rede_interna", []))
-    for porta in somente_int:
-        enc_lista = [p for p in inv["portas_em_escuta"] if p["porta"] == porta]
-        vazadas = [p for p in enc_lista if p["bind"] in WILDCARDS]
-        if vazadas:
+    # ── portas_em_escuta.* ──
+    publicas_perm = set(esperado.get("portas_em_escuta", {}).get("publicas_permitidas", []))
+    somente_int = esperado.get("portas_em_escuta", {}).get("somente_rede_interna", [])
+    portas = inv["portas_em_escuta"]
+    WILDCARDS = {"0.0.0.0", "::", "*", ""}
+    if portas is None:
+        motivo = "comando ss nao disponivel ou falhou"
+        resultado.append(nv("portas_em_escuta.publicas_permitidas",
+                            f"apenas {sorted(publicas_perm)} públicas", motivo))
+        for porta in somente_int:
+            resultado.append(nv("portas_em_escuta.somente_rede_interna",
+                                f"{porta} somente rede interna", motivo))
+    else:
+        portas_pub = [p for p in portas if p["bind"] in WILDCARDS]
+        nao_perm = [p for p in portas_pub if p["porta"] not in publicas_perm]
+        if nao_perm:
+            enc = ", ".join(f"{p['porta']} em {p['bind']}" for p in nao_perm)
             resultado.append(desvio(
-                "portas_em_escuta.somente_rede_interna",
-                f"{porta} somente rede interna",
-                f"{porta} exposta em {vazadas[0]['bind']}",
-            ))
-        elif enc_lista:
-            resultado.append(ok(
-                "portas_em_escuta.somente_rede_interna",
-                f"{porta} somente rede interna",
-                f"{porta} em {enc_lista[0]['bind']}",
+                "portas_em_escuta.publicas_permitidas",
+                f"apenas {sorted(publicas_perm)} públicas",
+                f"não permitidas expostas: {enc}",
             ))
         else:
             resultado.append(ok(
-                "portas_em_escuta.somente_rede_interna",
-                f"{porta} somente rede interna",
-                f"{porta} não encontrada em escuta",
+                "portas_em_escuta.publicas_permitidas",
+                f"apenas {sorted(publicas_perm)} públicas",
+                "nenhuma porta não autorizada em endereço público",
             ))
+
+        for porta in somente_int:
+            enc_lista = [p for p in portas if p["porta"] == porta]
+            vazadas = [p for p in enc_lista if p["bind"] in WILDCARDS]
+            if vazadas:
+                resultado.append(desvio(
+                    "portas_em_escuta.somente_rede_interna",
+                    f"{porta} somente rede interna",
+                    f"{porta} exposta em {vazadas[0]['bind']}",
+                ))
+            elif enc_lista:
+                resultado.append(ok(
+                    "portas_em_escuta.somente_rede_interna",
+                    f"{porta} somente rede interna",
+                    f"{porta} em {enc_lista[0]['bind']}",
+                ))
+            else:
+                resultado.append(ok(
+                    "portas_em_escuta.somente_rede_interna",
+                    f"{porta} somente rede interna",
+                    f"{porta} não encontrada em escuta",
+                ))
 
     # ── chaves_ssh.emitidas_por ──
     emitidas_por = esperado.get("chaves_ssh", {}).get("emitidas_por", "")
+    esp_chaves = f"todas emitidas por {emitidas_por}"
     chaves = inv["chaves_ssh"]
-    if not chaves:
-        resultado.append(desvio(
-            "chaves_ssh.emitidas_por",
-            f"todas emitidas por {emitidas_por}",
-            "nenhuma chave em authorized_keys",
-        ))
+    if chaves is None:
+        resultado.append(nv("chaves_ssh.emitidas_por", esp_chaves,
+                            "authorized_keys existe mas nao pode ser lido"))
+    elif not chaves:
+        resultado.append(desvio("chaves_ssh.emitidas_por", esp_chaves,
+                                "nenhuma chave em authorized_keys"))
     else:
         estranhas = [c for c in chaves if emitidas_por not in c["identificacao"]]
         if estranhas:
             ids = [c["identificacao"] for c in estranhas]
             resultado.append(desvio(
-                "chaves_ssh.emitidas_por",
-                f"todas emitidas por {emitidas_por}",
+                "chaves_ssh.emitidas_por", esp_chaves,
                 f"{len(estranhas)} chave(s) não reconhecida(s): {ids}",
             ))
         else:
             resultado.append(ok(
-                "chaves_ssh.emitidas_por",
-                f"todas emitidas por {emitidas_por}",
+                "chaves_ssh.emitidas_por", esp_chaves,
                 f"{len(chaves)} chave(s), todas com identificação correta",
             ))
 
@@ -501,9 +536,9 @@ def renderizar_markdown(dados: dict, conformidade: list[dict]) -> str:
 
     if nao_vs:
         linhas += ["## Não verificado", ""]
-        linhas += ["| Regra | Motivo |", "|---|---|"]
+        linhas += ["| Regra | Esperado | Motivo |", "|---|---|---|"]
         for c in nao_vs:
-            linhas.append(f"| {c['regra']} | {c.get('motivo', '')} |")
+            linhas.append(f"| {c['regra']} | {_fmt(c['esperado'])} | {c.get('motivo', '')} |")
         linhas.append("")
 
     if conformes:

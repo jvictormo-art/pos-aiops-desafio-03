@@ -39,8 +39,15 @@ Vai para stdout. Quando `--format both`, JSON primeiro, depois `---`, depois Mar
 | Regra | Por quê é nao_verificado | Evidência esperada |
 |---|---|---|
 | `ssh.login_de_root` | `sshd -T` requer privilégio elevado | `login_de_root: null`, `motivo: "exige privilegio que o usuario da coleta nao tem"` |
-| Qualquer regra de serviço | systemd não disponível no host | `motivo: "systemd nao disponivel ou nao acessivel"` |
+| Qualquer regra de serviço | systemd não é o init em execução (`/run/systemd/system` ausente) ou `systemctl list-units` sai com código ≠ 0 | `motivo: "systemd nao disponivel ou nao acessivel"` |
+| `portas_em_escuta.*` (as duas regras) | `ss` ausente ou sai com código ≠ 0 | `motivo: "comando ss nao disponivel ou falhou"` |
+| `swap.habilitado` | `/proc/swaps` não legível | `motivo: "/proc/swaps nao legivel"` |
+| `chaves_ssh.emitidas_por` | `authorized_keys` existe mas não pode ser lido (arquivo inexistente é desvio, não nao_verificado) | `motivo: "authorized_keys existe mas nao pode ser lido"` |
+| `so.*` | `/etc/os-release` não legível | `motivo: "/etc/os-release nao legivel"` |
+| `kernel.versao_minima` | `uname -r` falhou | `motivo: "uname -r falhou"` |
 | `ntp.sincronizado` | timedatectl não disponível | `motivo: "timedatectl nao disponivel"` |
+
+**Regra da coleta**: todo comando tem o código de saída conferido. Saída vazia de um comando que falhou nunca é interpretada como "nada encontrado" — o coletor devolve `null` e a auditoria marca a regra como `nao_verificado`. O exit code de `systemctl is-system-running` não é usado para detectar o systemd: sem systemd em execução ele responde `offline` com exit 1, o mesmo código de `degraded`.
 
 ---
 
@@ -150,9 +157,9 @@ Coletado em <data hora> UTC · baseline v<versao>
 | médio   | ... | ... | ... |
 
 ## Não verificado
-| Regra | Motivo |
-|---|---|
-| ... | ... |
+| Regra | Esperado | Motivo |
+|---|---|---|
+| ... | ... | ... |
 
 ## Conforme
 regra1 · regra2 · regra3

@@ -1,0 +1,40 @@
+# VM mínima para metacortex-inventario — reproduz o cenário da revisão:
+# Ubuntu 22.04 SEM systemd em execução e SEM o comando ss (iproute2 ausente).
+# O sshd roda direto como PID 1.
+#
+# Build:  docker build -f Dockerfile.test-vm-minima \
+#           --build-arg AUDIT_PUBKEY="$(cat ~/.ssh/id_ed25519.pub)" \
+#           -t metacortex-test-vm-minima .
+# Run:    docker run -d -p 2223:22 --name test-vm-minima metacortex-test-vm-minima
+# Teste:  python3 inventario.py --host 127.0.0.1 --porta 2223 --user auditor \
+#           --key ~/.ssh/id_ed25519 --format md
+#
+# Esperado: servicos.* e portas_em_escuta.* como nao_verificado — nunca conforme.
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# O pacote systemd é instalado (o binário systemctl existe), mas o systemd
+# não é o PID 1 — exatamente o caso que enganava a versão anterior, em que
+# `systemctl is-system-running` responde "offline" com exit 1.
+# iproute2 (ss) é removido caso venha como dependência.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-server systemd \
+    && (apt-get purge -y iproute2 || true) \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /run/sshd && ssh-keygen -A && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config
+
+RUN useradd -m -s /bin/bash auditor && \
+    mkdir -p /home/auditor/.ssh && chmod 700 /home/auditor/.ssh
+
+ARG AUDIT_PUBKEY
+RUN echo "${AUDIT_PUBKEY:-ssh-ed25519 AAAA_placeholder} metacortex-platform" \
+      > /home/auditor/.ssh/authorized_keys && \
+    chmod 600 /home/auditor/.ssh/authorized_keys && \
+    chown -R auditor:auditor /home/auditor/.ssh
+
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D", "-e"]

@@ -43,6 +43,12 @@ O container de teste reportou `swap.habilitado: true, tamanho: 1024M` porque `/p
 
 O spec-decisoes.md registrou que `AutoAddPolicy` é adequado para o MVP de lab e deve ser substituído por `RejectPolicy + known_hosts` em produção. Esta decisão foi mantida e explicitada como pendência de versão futura, não como bug.
 
+### 6. Revisão: dado não coletado era reportado como `conforme`
+
+A revisão rodou a ferramenta numa VM sem systemd e sem `ss` e recebeu `servicos.proibidos` e as duas regras de porta como `conforme`. Causa: a detecção do systemd aceitava o exit 1 de `systemctl is-system-running` (que é o `offline` de um host sem systemd em execução) e nenhum coletor conferia o código de saída do comando — saída vazia virava "nenhum serviço proibido" e "nenhuma porta exposta".
+
+**Correção**: o systemd passa a ser detectado por `test -d /run/systemd/system` (mesmo teste do `sd_booted()`), todo coletor confere o exit code e devolve `null` quando o comando falha, e a auditoria transforma `null` em `nao_verificado` com motivo — em serviços, portas, swap, chaves SSH, SO e kernel. Coberto por `ferramenta/test_inventario.py` (13 testes; a versão anterior falha em 10 deles) e reproduzível em SSH real com `ferramenta/Dockerfile.test-vm-minima`.
+
 ---
 
 ## O que ficou para uma versão futura
