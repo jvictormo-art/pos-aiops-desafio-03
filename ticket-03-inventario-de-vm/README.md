@@ -14,7 +14,7 @@ Este documento mapeia e aponta onde está cada item solicitado no **Entregue** d
 | **Ambiente de Testes** | [`ferramenta/Dockerfile.test-vm`](./ferramenta/Dockerfile.test-vm) | Dockerfile Ubuntu com systemd ativo para testes de laboratório |
 | **Ambiente de Testes sem systemd/ss** | [`ferramenta/Dockerfile.test-vm-minima`](./ferramenta/Dockerfile.test-vm-minima) | VM mínima que reproduz o cenário da revisão: tudo que não é coletado sai como `nao_verificado` |
 | **Testes Automatizados** | [`ferramenta/test_inventario.py`](./ferramenta/test_inventario.py) | `python3 -m unittest test_inventario.py -v` — coleta + auditoria com SSH simulado, incluindo host sem systemd e sem `ss` |
-| **Evidências de Execução** | [`saida/evidencia/`](./saida/evidencia/) | Execuções reais registradas em JSON e Markdown |
+| **Evidências de Execução** | [`saida/evidencia/`](./saida/evidencia/) | Execuções reais registradas em JSON e Markdown. Os arquivos `revisao-*` são da versão corrigida: VM completa, VM mínima (sem systemd e sem `ss`) e a mesma VM mínima rodada com a versão anterior, para comparação |
 | **Documento de Curadoria** | [`saida/curadoria.md`](./saida/curadoria.md) | Lições aprendidas, nuances de boot e divergências tratadas |
 
 ---

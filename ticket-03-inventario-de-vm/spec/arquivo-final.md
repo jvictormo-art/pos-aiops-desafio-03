@@ -49,6 +49,17 @@ A revisão rodou a ferramenta numa VM sem systemd e sem `ss` e recebeu `servicos
 
 **Correção**: o systemd passa a ser detectado por `test -d /run/systemd/system` (mesmo teste do `sd_booted()`), todo coletor confere o exit code e devolve `null` quando o comando falha, e a auditoria transforma `null` em `nao_verificado` com motivo — em serviços, portas, swap, chaves SSH, SO e kernel. Coberto por `ferramenta/test_inventario.py` (13 testes; a versão anterior falha em 10 deles) e reproduzível em SSH real com `ferramenta/Dockerfile.test-vm-minima`.
 
+**Execução real (SSH) na VM mínima**, que tem o `systemctl` instalado mas responde `offline` com exit 1, sem systemd como PID 1 e sem `ss`:
+
+| Regra | Versão anterior | Versão corrigida |
+|---|---|---|
+| `servicos.proibidos` (×2) | conforme | nao_verificado — systemd nao disponivel ou nao acessivel |
+| `servicos.ativos` (×4) | desvio "ausente" | nao_verificado — systemd nao disponivel ou nao acessivel |
+| `portas_em_escuta.publicas_permitidas` | conforme | nao_verificado — comando ss nao disponivel ou falhou |
+| `portas_em_escuta.somente_rede_interna` | conforme | nao_verificado — comando ss nao disponivel ou falhou |
+
+Saídas em `saida/evidencia/revisao-vm-minima-versao-antiga-md.txt` (antes) e `revisao-vm-minima-{md,json}.txt` (depois). A mesma versão corrigida, rodada na VM completa (`revisao-vm-completa-{md,json}.txt`), continua apontando os desvios propositais (chave fora do padrão, serviços ausentes, swap), sem regressão.
+
 ---
 
 ## O que ficou para uma versão futura

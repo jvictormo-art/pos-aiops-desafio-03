@@ -1,0 +1,31 @@
+# Inventário — bc79d8d06c3e (127.0.0.1)
+Coletado em 2026-10-08 22:25:11 UTC · baseline v1
+
+## Desvios
+
+| Severidade | Regra | Esperado | Encontrado |
+|---|---|---|---|
+| crítico | swap.habilitado | false | true (1024M) |
+
+## Não verificado
+
+| Regra | Esperado | Motivo |
+|---|---|---|
+| servicos.ativos | ssh ativo | systemd nao disponivel ou nao acessivel |
+| servicos.ativos | containerd ativo | systemd nao disponivel ou nao acessivel |
+| servicos.ativos | node_exporter ativo | systemd nao disponivel ou nao acessivel |
+| servicos.ativos | chrony ativo | systemd nao disponivel ou nao acessivel |
+| servicos.proibidos | telnet.socket inativo | systemd nao disponivel ou nao acessivel |
+| servicos.proibidos | rpcbind.socket inativo | systemd nao disponivel ou nao acessivel |
+| portas_em_escuta.publicas_permitidas | apenas [22] públicas | comando ss nao disponivel ou falhou |
+| portas_em_escuta.somente_rede_interna | 9100 somente rede interna | comando ss nao disponivel ou falhou |
+| ssh.login_de_root | false | exige privilegio que o usuario da coleta nao tem |
+| ntp.sincronizado | true | timedatectl nao disponivel |
+
+## Conforme
+
+so.distribuicao · so.versao_minima · kernel.versao_minima · chaves_ssh.emitidas_por
+
+---
+**Resumo**: 4 conforme · 1 desvio · 10 não verificado
+**Por severidade**: 1 crítico
