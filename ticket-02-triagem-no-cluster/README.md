@@ -1,32 +1,29 @@
-# Ticket 02 — Triagem no Cluster
+# Ticket 02 — Triagem no cluster
 
-Este documento mapeia e aponta onde está cada item solicitado no **Entregue** do Ticket 02:
+Skill `metacortex-triage`: método único de triagem de workloads Kubernetes, que acessa o cluster só pelo `mcp-server-kubernetes` em modo não destrutivo e nunca escreve.
 
-| Item do Entregue | Arquivo / Diretório | Descrição |
-|---|---|---|
-| **Skill de Triagem** | [`skill/SKILL.md`](./skill/SKILL.md) | Skill `metacortex-triage` (método de 5 camadas, estritamente read-only) |
-| **Triagem Chamado 01** | [`saida/triagem-chamado-01-nyx-prod.md`](./saida/triagem-chamado-01-nyx-prod.md) | Diagnóstico completo: OOMKilled (Exit Code 137, limits.memory baixo) |
-| **Triagem Chamado 02** | [`saida/triagem-chamado-02-orion-stg.md`](./saida/triagem-chamado-02-orion-stg.md) | Diagnóstico completo: ImagePullBackOff (tag inexistente no registry) |
-| **Triagem Chamado 03** | [`saida/triagem-chamado-03-nyx-stg.md`](./saida/triagem-chamado-03-nyx-stg.md) | Diagnóstico completo: 503 com pods Running (discrepância Service × labels) |
-| **Matriz de Roteamento** | [`saida/matriz-roteamento.md`](./saida/matriz-roteamento.md) | Desambiguação de disparo entre `metacortex-manifest` e `metacortex-triage` |
-| **Comparação Com/Sem Skill** | [`saida/comparacao-com-sem-skill.md`](./saida/comparacao-com-sem-skill.md) | Benchmarking de tool calls, hipóteses e tempo em dois incidentes |
-| **Medição de Tokens** | [`saida/medicao-tokens/`](./saida/medicao-tokens/) | `medir.sh` roda cada caso com e sem skill em sessões limpas (`claude -p`); `consolidar.py` gera as tabelas de tokens e custo em `comparacao-com-sem-skill.md` |
-| **Origem e Curadoria** | [`origem-e-curadoria.md`](./origem-e-curadoria.md) | Gênese do método, garantia estrutural de não-escrita e limites |
-| **Configuração do Servidor MCP** | [`.mcp.json`](./.mcp.json) | `mcp-server-kubernetes@4.1.9` em modo não destrutivo (`ALLOW_ONLY_NON_DESTRUCTIVE_TOOLS=true`), fixado no contexto `kind-metacortex-lab` |
-| **Permissões do Agente** | [`.claude/settings.json`](./.claude/settings.json) | Libera só `kubectl_get`/`describe`/`logs`; nega as ferramentas de escrita e a troca de contexto que o modo não destrutivo ainda expõe |
-| **Evidência do Modo Não Destrutivo** | [`saida/evidencia-mcp-nao-destrutivo.txt`](./saida/evidencia-mcp-nao-destrutivo.txt) | `tools/list` do servidor iniciado com a configuração versionada: ferramentas destrutivas ausentes |
-| **Manifests dos Laboratórios** | [`manifests/`](./manifests/) | Manifests aplicados no cluster `kind-metacortex-lab` para os 3 chamados |
+## Onde está cada item do Entregue
 
-## Como reproduzir o ambiente
+| Item do enunciado | Onde |
+|---|---|
+| **A skill completa** | [`skill/SKILL.md`](./skill/SKILL.md), instalada em [`../.claude/skills/metacortex-triage`](../.claude/skills/) |
+| **Configuração do servidor MCP em modo não destrutivo** | [`.mcp.json`](./.mcp.json) (`mcp-server-kubernetes@4.1.9`, `ALLOW_ONLY_NON_DESTRUCTIVE_TOOLS=true`, contexto fixado) e [`.claude/settings.json`](./.claude/settings.json) (só `get`/`describe`/`logs` liberados); verificação em [`saida/evidencia-mcp-nao-destrutivo.txt`](./saida/evidencia-mcp-nao-destrutivo.txt) |
+| **Origem da skill** (fluxo, como foi produzida, ferramenta) | [`origem-e-curadoria.md`](./origem-e-curadoria.md), seção "De qual fluxo a skill nasceu" |
+| **Saída real da triagem dos três chamados, com a causa** | Execução da skill pelo agente, com o cluster acessado **só pelas ferramentas do MCP** (cada chamada `mcp__kubernetes__kubectl_*` e o que o cluster respondeu): [`triagem-chamado-01-nyx-prod.md`](./saida/triagem-chamado-01-nyx-prod.md) (OOMKilled, limite de 24Mi) · [`triagem-chamado-02-orion-stg.md`](./saida/triagem-chamado-02-orion-stg.md) (tag `v1.14.2` inexistente) · [`triagem-chamado-03-nyx-stg.md`](./saida/triagem-chamado-03-nyx-stg.md) (seletor `nyx-api` × label `nyxapi`). Registro bruto em [`saida/triagens/logs/`](./saida/triagens/logs/) |
+| **Matriz de roteamento** (o que disparou, o que errou, o que mudou) | [`saida/matriz-roteamento.md`](./saida/matriz-roteamento.md): as duas skills instaladas, 10 frases × 3 sessões limpas, antes e depois dos ajustes, mais frases reformuladas; logs em [`saida/roteamento/logs/`](./saida/roteamento/logs/) |
+| **Comparação com e sem skill** (saída, custo e tempo) | [`saida/comparacao-com-sem-skill.md`](./saida/comparacao-com-sem-skill.md): 12 sessões medidas, tokens, custo, tool calls e duração; logs em [`saida/medicao-tokens/runs/`](./saida/medicao-tokens/runs/) |
+| **Curadoria** (o que o método fixou e o que ficou com o agente; como foi garantido que não escreve) | [`origem-e-curadoria.md`](./origem-e-curadoria.md) |
+| **Manifests dos três chamados** | [`manifests/`](./manifests/), aplicados no cluster `kind-metacortex-lab` |
 
-Abra o Claude Code **a partir desta pasta** para que `.mcp.json` e `.claude/settings.json` sejam carregados:
+## Como reproduzir
 
 ```bash
-cd ticket-02-triagem-no-cluster
-claude
-# /mcp  → deve listar o servidor "kubernetes" conectado
+kubectl --context kind-metacortex-lab apply -f manifests/      # os três chamados
+saida/triagens/rodar-triagens.sh                                # triagem dos três chamados pelo MCP
+saida/roteamento/rodar-matriz.sh 3 <rotulo>                     # matriz de roteamento
+saida/medicao-tokens/medir.sh 3                                 # com × sem skill
 ```
 
----
-- **Agente:** Claude Code
-- **Modelos:** Claude Opus 4.8 / Claude Sonnet 4.6
+Todos os scripts abrem sessões do Claude Code (`claude -p`) com o servidor MCP de [`.mcp.json`](./.mcp.json) e Bash bloqueado.
+
+- **Agente:** Claude Code · **Modelos:** Claude Opus 4.8 / Sonnet 4.6 (produção da skill) e Sonnet 5.5 (execuções gravadas)

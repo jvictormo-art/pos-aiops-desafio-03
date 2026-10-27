@@ -1,6 +1,6 @@
 ## Medição real de tokens
 
-Números extraídos do `claude -p --output-format stream-json` de cada sessão (gerados por [`medicao-tokens/medir.sh`](./medicao-tokens/medir.sh) e [`medicao-tokens/consolidar.py`](./medicao-tokens/consolidar.py); o JSON bruto de cada execução está em `medicao-tokens/runs/`). Cada execução é uma sessão limpa, com o mesmo servidor MCP, as mesmas permissões e o mesmo prompt; a única diferença entre as variantes é a skill instalada em `.claude/skills/`.
+Números extraídos do `claude -p --output-format stream-json` de cada sessão (gerados por [`medicao-tokens/medir.sh`](./medir.sh) e [`medicao-tokens/consolidar.py`](./consolidar.py); o JSON bruto de cada execução está em `medicao-tokens/runs/`). Cada execução é uma sessão limpa, com o mesmo servidor MCP, as mesmas permissões e o mesmo prompt; a única diferença entre as variantes é a skill instalada em `.claude/skills/`.
 
 Modelo(s): claude-sonnet-5-5.
 

@@ -176,7 +176,8 @@ def main():
     texto = "\n".join(bloco)
 
     with open(os.path.join(AQUI, "resultado.md"), "w") as f:
-        f.write(texto + "\n\n## Diagnóstico final de cada execução\n\n")
+        # O bloco é escrito para comparacao-com-sem-skill.md (pasta acima); aqui os links são locais.
+        f.write(texto.replace("./medicao-tokens/", "./") + "\n\n## Diagnóstico final de cada execução\n\n")
         for nome, r in execucoes:
             f.write(f"### `{nome}`\n\n{r['diagnostico']}\n\n")
 

@@ -12,9 +12,13 @@ A skill não foi escrita de cabeça. Foi destilada de um fluxo de triagem real e
 
 2. Para cada chamado, o diagnóstico foi feito manualmente via `kubectl` — sem script, sem automação — seguindo a mesma sequência: `get pods` → identificar camada pelo STATUS → aprofundar com `describe` ou `get events` → cruzar com informações adicionais quando necessário.
 
-3. Cada passo executado e cada saída relevante foi registrada nos arquivos de triagem (`saida/triagem-chamado-0*.md`).
+3. Cada passo executado e cada saída relevante foi registrado (a versão desse registro manual está no histórico do git, nos arquivos `saida/triagem-chamado-0*.md` do commit "Add skill metacortex-triage e entregas do Ticket 02").
 
 4. **Só após os três diagnósticos fechados**, o método foi extraído: os padrões que se repetiram nos três casos (começar pelo STATUS do pod, ir para o campo certo no describe, parar assim que a causa fechar) viraram a tabela de decisão da skill.
+
+5. **Depois de empacotada, a skill foi executada pelo agente nos três chamados, com o cluster acessado só pelo `mcp-server-kubernetes`** em modo não destrutivo (Bash bloqueado na sessão). Essas execuções são a saída entregue em `saida/triagem-chamado-0*.md`: cada arquivo mostra a skill carregada, cada chamada `mcp__kubernetes__kubectl_*` com o que o cluster respondeu e o diagnóstico final. Script: `saida/triagens/rodar-triagens.sh`; registro bruto: `saida/triagens/logs/`.
+
+**Ferramentas:** Claude Code (Opus 4.8 na produção da skill; Sonnet 5.5 nas execuções gravadas), `kubectl` no fluxo manual de origem e `mcp-server-kubernetes` 4.1.9 nas execuções da skill.
 
 **A skill é o método, não o procedimento.** Ela não prescreve "faça exatamente esses comandos" — prescreve a lógica de decisão (qual STATUS leva a qual camada, qual campo confirma a causa).
 
@@ -89,3 +93,13 @@ Ferramentas de escrita (`kubectl_apply`, `kubectl_delete`, `kubectl_create`, `ku
 | Sugestão de valores corretos para resource limits | Requer dados de telemetria (Prometheus) não disponíveis na triagem |
 
 Tudo o que está na skill foi exercitado nos três chamados reais. O que não foi exercitado não foi incluído — a skill nasceu do fluxo, não da imaginação de casos futuros.
+
+---
+
+## Ajustes na skill depois de executá-la (revisão 2)
+
+| Ajuste | O que mostrou a necessidade |
+|---|---|
+| Tabela do Passo 1: `Running` **(Ready ou não)** com sintoma de tráfego vai para Roteamento | A tabela mandava para Roteamento só `Running` com **0/N Ready**, mas no Chamado 3 os pods estão `1/1 Ready`, e é exatamente esse o ponto do chamado. O agente acertava apesar da tabela |
+| Seção "Quando não é triagem": manifesto não aplicado ou `apply` rejeitado vai para a `metacortex-manifest`; na dúvida, perguntar se o `apply` foi aceito | Matriz de roteamento, frase 7 ("esse manifesto não sobe no cluster"): a triagem disparava e pedia o namespace sem considerar que talvez não houvesse nada no cluster ([`saida/matriz-roteamento.md`](./saida/matriz-roteamento.md)) |
+| AÇÃO SUGERIDA remete à `metacortex-manifest` quando a correção é no YAML, e não sugere atalhos que o padrão proíbe | Ticket 04, sessão gravada 03: diante de um pull que falhava, a triagem sugeriu "ajustar o campo `image`", e trocar por imagem pública viola a regra 3.7. A triagem não conhecia o padrão da casa ([`../ticket-04-dashboard-do-cluster/saida/skills-neste-projeto.md`](../ticket-04-dashboard-do-cluster/saida/skills-neste-projeto.md)) |

@@ -13,6 +13,8 @@ description: Investiga e identifica a causa raiz de falhas em workloads Kubernet
 
 O chamado chega como: namespace + sintoma declarado pelo cliente (ex: "pods não sobem", "serviço retorna 503", "deploy travou"). Se o namespace não vier, pergunte antes de começar.
 
+**Quando não é triagem.** A triagem investiga o que **já está no cluster**. Se o pedido fala de um manifesto que ainda não foi aplicado, ou cujo `kubectl apply` foi **rejeitado** (erro de validação, nenhum objeto criado), não há o que ler no cluster: diga isso ao operador e indique a skill `metacortex-manifest` para conferir o YAML. Na dúvida ("esse manifesto não sobe no cluster"), pergunte primeiro: *o `apply` foi aceito e os pods não ficam de pé, ou o `apply` deu erro?*
+
 ---
 
 ## Método de triagem — camadas em ordem
@@ -30,8 +32,10 @@ Leia a coluna STATUS e decida a camada:
 | `OOMKilled` ou `CrashLoopBackOff` (saindo rápido) | Container | Passo 2a |
 | `ErrImagePull` ou `ImagePullBackOff` | Registry | Passo 2b |
 | `Pending` | Agendamento | Passo 2c |
-| `Running` com 0/N Ready e serviço retorna 503 | Roteamento | Passo 2d |
-| `Running` com 0/N Ready sem queixas de 503 | Readiness/App | Passo 2e |
+| `Running` (Ready ou não) e o sintoma é tráfego: 503, timeout, "Service sem endpoint" | Roteamento | Passo 2d |
+| `Running` com 0/N Ready sem queixa de tráfego | Readiness/App | Passo 2e |
+
+Pod `Running` e `1/1 Ready` **não** quer dizer que o tráfego chega: o Service pode não ter endpoint. Por isso o sintoma de tráfego decide a camada antes do READY.
 
 ---
 
@@ -137,3 +141,5 @@ AÇÃO SUGERIDA: <o que o time deve corrigir — sem aplicar>
 ```
 
 Inclua também o que está funcionando ao lado do que quebrou (o banco sobe? as outras réplicas?)  — isso separa triagem de chute.
+
+Quando a correção for **no manifesto** (limite de memória, tag de imagem, seletor, probe), a AÇÃO SUGERIDA diz o que mudar e remete à skill `metacortex-manifest` para conferir o YAML corrigido contra o padrão da casa antes de reaplicar. Não sugira atalhos que o padrão proíbe, como trocar a imagem por uma de registry público ou usar `:latest`.
