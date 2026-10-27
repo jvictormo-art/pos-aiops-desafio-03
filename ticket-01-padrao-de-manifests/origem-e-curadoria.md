@@ -35,6 +35,21 @@ O fake-shop foi escolhido por ser o mais exigente: sem endpoints de saúde, migr
 
 ## Curadoria: onde está cada regra
 
+### O que o Trivy já cobria
+
+Levantado rodando `trivy config` no manifesto barrado **antes** de escrever qualquer script (18 achados). Regra por regra, em [`skill/regras-buckets.md`](./skill/regras-buckets.md):
+
+| Regra do padrão | Coberta pelo Trivy? | Verificações do Trivy |
+|---|---|---|
+| 2.1 requests e limits | sim | KSV-0011, 0015, 0016, 0018 |
+| 3.1 tag `:latest` proibida | sim | KSV-0013 |
+| 3.2 securityContext | sim | KSV-0001, 0003, 0004, 0012, 0014, 0020, 0106, 0118 |
+| 3.6 hostNetwork, hostPID, privileged | sim | verificados mesmo quando ausentes |
+| 3.7 registry interno | **não**: o KSV-0125 faz o contrário (marca `registry.metacortex.io` como não confiável), por isso é suprimido e a regra vai para o script |
+| 1.1, 1.2, 1.3, 1.4, 1.5, 2.2, 2.3, 2.4, 3.3, 3.4 | não | viraram script ou instrução (abaixo) |
+
+O script não reimplementa nenhuma regra da primeira parte da tabela.
+
 ### O que virou script empacotado (`check-manifest.py`)
 
 | Regra | Lógica |
@@ -80,7 +95,7 @@ Tabela completa regra × balde, com justificativa por linha e notas sobre o Triv
 |---|---|
 | Leitura de repositório (GitHub) | Modo escrita e modo conferência exigem abrir o código para confirmar porta, endpoints e variáveis de ambiente |
 | Execução de `trivy` | Conferência mecânica das regras 3.1, 2.1, 3.2, 3.6 |
-| Execução de `python3 skill/check-manifest.py` | Conferência das regras que o Trivy não cobre |
+| Execução de `python3 <diretório da skill>/check-manifest.py` | Conferência das regras que o Trivy não cobre |
 | Escrita no diretório de manifests | Modo escrita gera arquivos YAML no destino indicado |
 
 ---
