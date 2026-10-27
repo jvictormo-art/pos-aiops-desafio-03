@@ -19,7 +19,7 @@
 | ↳ O que a tela pode afirmar sobre saúde | [ADR-007](./docs/adr/ADR-007-o-que-a-tela-afirma-sobre-saude.md) |
 | **Artefatos do ciclo do OpenSpec** | [`openspec/`](./openspec/): spec vigente em [`openspec/specs/dashboard-cluster/spec.md`](./openspec/specs/dashboard-cluster/spec.md); changes em [`openspec/changes/`](./openspec/changes/), cada uma com `proposal.md`, `design.md`, `tasks.md` e `specs/` |
 | **Código** | [`dashboard/app.py`](./dashboard/app.py) (interface), [`dashboard/k8s_reader.py`](./dashboard/k8s_reader.py) (única camada que fala com a API) |
-| **Garantia de só leitura** | código + [`dashboard/test_somente_leitura.py`](./dashboard/test_somente_leitura.py) + [`rbac/dashboard-leitura.yaml`](./rbac/dashboard-leitura.yaml) |
+| **Garantia de só leitura** | código + [`dashboard/test_somente_leitura.py`](./dashboard/test_somente_leitura.py) + [`rbac/dashboard-leitura.yaml`](./rbac/dashboard-leitura.yaml), aplicada no cluster e conferida com `kubectl auth can-i` em [`evidencia/10-identidade-somente-leitura.txt`](./evidencia/10-identidade-somente-leitura.txt) (lê os seis recursos da tela; não apaga, altera, cria nem executa) |
 | **Testes** | `cd dashboard && python3 -m unittest test_somente_leitura test_k8s_reader` (13 testes) |
 | **Evidência de execução contra o cluster** | [`evidencia/`](./evidencia/), gerada por [`evidencia/capturar.py`](./evidencia/capturar.py) |
 | ↳ Aplicação rodando | `01` kube-news (nyx-dev) · `05` fake-shop (orion-prod) · `02`–`04` chamados do Ticket 02 · `09` busca por nome |

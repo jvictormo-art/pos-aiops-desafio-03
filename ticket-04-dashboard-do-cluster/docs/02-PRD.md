@@ -55,7 +55,7 @@ Não substitui o terminal; encurta o reconhecimento.
 | CA4 | Cluster que não responde: mensagem, sem tela em branco nem stack trace | `evidencia/06` |
 | CA5 | Credencial expirada ou inválida: idem | `evidencia/07` |
 | CA6 | Permissão negada para um tipo de recurso, os outros continuam | `evidencia/08` (contexto `platform-ro`) |
-| CA7 | Nenhuma chamada de escrita, verificável | `dashboard/test_somente_leitura.py` + `rbac/dashboard-leitura.yaml` |
+| CA7 | Nenhuma chamada de escrita, verificável | `dashboard/test_somente_leitura.py` + `rbac/dashboard-leitura.yaml` + `evidencia/10` (`kubectl auth can-i`) |
 | CA8 | "Pronto" sem probe é sinalizado | `evidencia/01` (Postgres de apoio sem probe) |
 
 ## Fora do escopo

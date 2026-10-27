@@ -1,0 +1,12 @@
+# kubectl auth can-i --as=system:serviceaccount:metacortex-dashboard:dashboard-leitura -n nyx-dev
+list     namespaces                           yes
+list     pods                                 yes
+list     deployments.apps                     yes
+list     services                             yes
+list     endpointslices.discovery.k8s.io      yes
+list     events                               yes
+delete   pods                                 no
+patch    deployments.apps                     no
+create   pods                                 no
+update   services                             no
+create   pods/exec                            no
