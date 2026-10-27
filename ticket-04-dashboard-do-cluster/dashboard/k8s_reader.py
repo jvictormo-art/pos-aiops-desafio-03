@@ -1,9 +1,10 @@
 """
 Camada de leitura contra a API do Kubernetes.
 
-Invariante estrutural: este módulo só importa e chama métodos list_*/get_*
-do cliente oficial. Nenhum create_*/patch_*/delete_*/replace_* aparece aqui.
-Isso é verificado por grep em tarefas.md — não é apenas uma promessa em texto.
+Invariante estrutural: este módulo só chama métodos list_* do cliente oficial.
+Nenhum create_*/patch_*/delete_*/replace_*/connect_* aparece aqui. Isso é
+verificado por test_somente_leitura.py (AST), e a ClusterRole de
+rbac/dashboard-leitura.yaml só concede get/list/watch (ADR-006).
 """
 
 from __future__ import annotations
@@ -139,9 +140,16 @@ class ClusterReader:
                     # causa mais específica disponível — substitui o motivo de waiting
                     motivo = cs.last_state.terminated.reason
 
+        # "Pronto" sem readinessProbe só diz que o processo subiu (ADR-007): a tela
+        # marca esse caso em vez de deixar o READY parecer uma verificação de saúde.
+        containers = getattr(pod.spec, "containers", None) or []
+        sem_readiness = any(getattr(c, "readiness_probe", None) is None for c in containers)
+
         return {
             "nome": pod.metadata.name,
             "ready": f"{ready_count}/{total}" if total else "0/0",
+            "pronto": bool(total) and ready_count == total,
+            "sem_readiness": sem_readiness,
             "status": status.phase,
             "restarts": restarts,
             "motivo": motivo,
@@ -158,7 +166,7 @@ class ClusterReader:
     def _resumir_deployment(self, dep) -> dict:
         desejado = dep.spec.replicas if dep.spec.replicas is not None else 0
         # readyReplicas é omitido pela API quando zero réplicas estão prontas —
-        # None e 0 são tratados como equivalentes para exibição (ver spec-comportamento.md)
+        # None e 0 são tratados como equivalentes para exibição (ver docs/03-TRD.md, "Ausência de campo")
         pronto = dep.status.ready_replicas or 0
 
         condicao = None
@@ -178,16 +186,19 @@ class ClusterReader:
             svc_resp = self._core.list_namespaced_service(namespace, _request_timeout=10)
             resultado = []
             for svc in svc_resp.items:
-                n_prontos = self._contar_endpoints_prontos(namespace, svc.metadata.name)
-                resultado.append({
-                    "nome": svc.metadata.name,
-                    "endpoint_texto": "sem endpoint" if n_prontos == 0 else f"{n_prontos} endereço(s)",
-                })
+                n_prontos, motivo = self._contar_endpoints_prontos(namespace, svc.metadata.name)
+                if n_prontos is None:
+                    texto = f"endpoint não verificado ({motivo})"
+                elif n_prontos == 0:
+                    texto = "sem endpoint"
+                else:
+                    texto = f"{n_prontos} endereço(s)"
+                resultado.append({"nome": svc.metadata.name, "endpoint_texto": texto})
             return Resultado.sucesso(resultado)
         except Exception as e:
             return _classificar_excecao(e)
 
-    def _contar_endpoints_prontos(self, namespace: str, service_name: str) -> int:
+    def _contar_endpoints_prontos(self, namespace: str, service_name: str) -> tuple[int | None, str | None]:
         """Soma endereços prontos através de TODAS as EndpointSlices do Service.
         Um Service pode ter mais de uma fatia (particionamento em blocos de 100).
 
@@ -198,6 +209,9 @@ class ClusterReader:
         cliente oficial trata `endpoints` como campo obrigatório não-nulo,
         lançando ValueError ao desserializar. Isso derrubaria a listagem do
         namespace inteiro por causa de UMA fatia vazia. Ver curadoria.md.
+
+        Devolve (None, motivo) quando as fatias não puderam ser lidas: "não
+        consegui ler" não é "não tem endpoint" (revisão 2, ADR-007).
         """
         try:
             resp = self._discovery.list_namespaced_endpoint_slice(
@@ -207,8 +221,10 @@ class ClusterReader:
                 _preload_content=False,
             )
             bruto = json.loads(resp.data)
-        except ApiException:
-            return 0
+        except ApiException as e:
+            return None, str(e.status)
+        except Exception as e:  # noqa: BLE001 — rede, JSON inválido: também não verificado
+            return None, type(e).__name__
 
         total = 0
         for sl in bruto.get("items", []):
@@ -216,7 +232,7 @@ class ClusterReader:
                 condicoes = ep.get("conditions") or {}
                 if condicoes.get("ready"):
                     total += len(ep.get("addresses") or [])
-        return total
+        return total, None
 
     def listar_eventos(self, namespace: str, limite: int = 20) -> Resultado:
         try:

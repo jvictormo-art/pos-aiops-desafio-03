@@ -1,0 +1,50 @@
+# Identidade só de leitura para o metacortex-dashboard (ADR-006).
+#
+# Quem quiser a garantia máxima roda o dashboard com uma credencial ligada a
+# esta ClusterRole: o apiserver recusa qualquer escrita, mesmo que o código
+# mudasse. test_somente_leitura.py confere que só há get/list/watch aqui.
+#
+# Aplicar:  kubectl apply -f rbac/dashboard-leitura.yaml
+# Conferir: kubectl auth can-i --list --as=system:serviceaccount:metacortex-dashboard:dashboard-leitura
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metacortex-dashboard-leitura
+  labels:
+    app.kubernetes.io/name: metacortex-dashboard
+    app.kubernetes.io/part-of: metacortex
+    app.kubernetes.io/managed-by: platform
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, pods, services, events]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metacortex-dashboard
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dashboard-leitura
+  namespace: metacortex-dashboard
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metacortex-dashboard-leitura
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: metacortex-dashboard-leitura
+subjects:
+  - kind: ServiceAccount
+    name: dashboard-leitura
+    namespace: metacortex-dashboard

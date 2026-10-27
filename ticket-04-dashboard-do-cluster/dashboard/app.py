@@ -3,9 +3,9 @@ metacortex-dashboard — TUI de leitura contra o current-context do kubeconfig.
 
 Uso: python3 app.py [--kubeconfig CAMINHO] [--namespace NOME]
 
-Só lê. Ver spec/spec-decisoes.md — "Como a garantia de leitura fica visível
-no projeto" — para a garantia estrutural de que nenhum verbo de escrita é
-chamado por este código.
+Só lê: a garantia está no código (só k8s_reader fala com a API, só com list_*),
+em test_somente_leitura.py e na ClusterRole de rbac/ (docs/adr/ADR-006).
+A tela não afirma saúde, só o que a API informa (docs/adr/ADR-007).
 """
 
 from __future__ import annotations
@@ -20,6 +20,14 @@ from textual.widgets import DataTable, Footer, Header, Input, Select, Static
 from k8s_reader import ClusterReader, Resultado
 
 POLL_INTERVAL_SEGUNDOS = 5
+LEGENDA_PRONTO = "* pronto sem readinessProbe: só indica que o processo subiu"
+
+
+def formatar_ready(pod: dict) -> str:
+    """READY como a API informa; marca '*' quando 'pronto' não passou por probe (ADR-007)."""
+    if pod.get("pronto") and pod.get("sem_readiness"):
+        return f'{pod["ready"]}*'
+    return pod["ready"]
 
 
 class PainelErro(Static):
@@ -156,7 +164,7 @@ class MetacortexDashboard(App):
         restritos += self._preencher_tabela(
             "tabela-pods", self._reader.listar_pods(self._namespace_atual),
             campo_busca="nome",
-            colunas=lambda p: (p["nome"], p["ready"], p["status"], str(p["restarts"]), p["motivo"] or "(aguardando)"),
+            colunas=lambda p: (p["nome"], formatar_ready(p), p["status"], str(p["restarts"]), p["motivo"] or "(aguardando)"),
             vazio_msg="Nenhum Pod neste namespace",
         )
         restritos += self._preencher_tabela(
@@ -180,10 +188,8 @@ class MetacortexDashboard(App):
 
         self._paineis_restritos = restritos
         rodape = self.query_one("#rodape-status", Static)
-        if restritos:
-            rodape.update(f"⚠ {restritos} painel(is) com acesso restrito neste contexto")
-        else:
-            rodape.update("")
+        aviso = f"   ⚠ {restritos} painel(is) com acesso restrito neste contexto" if restritos else ""
+        rodape.update(LEGENDA_PRONTO + aviso)
 
     def _preencher_tabela(self, table_id: str, resultado: Resultado, campo_busca: str, colunas, vazio_msg: str) -> int:
         tabela = self.query_one(f"#{table_id}", DataTable)
