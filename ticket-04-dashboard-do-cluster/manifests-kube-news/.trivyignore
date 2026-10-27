@@ -1,0 +1,5 @@
+# KSV-0125: Trivy não conhece o registry interno registry.metacortex.io; o padrão (regra 3.7) exige esse registry.
+KSV-0125
+
+# KSV-01010: Trivy marca DB_PORT/DB_SSL_REQUIRE no ConfigMap como "conteúdo sensível"; não são sensíveis.
+KSV-01010
