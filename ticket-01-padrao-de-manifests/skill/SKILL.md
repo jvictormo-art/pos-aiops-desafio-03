@@ -1,6 +1,6 @@
 ---
 name: metacortex-manifest
-description: Escreve, confere ou valida manifests de Kubernetes antes de aplicar no cluster, seguindo o padrão interno da Metacortex de identidade, resiliência e segurança. Use ao pedir para gerar, escrever, revisar ou validar um manifest — o trabalho acontece no YAML, não no cluster.
+description: Escreve, confere ou valida manifests de Kubernetes antes de aplicar no cluster, seguindo o padrão interno da Metacortex (o "padrão da casa") de identidade, resiliência e segurança. Use ao pedir para gerar, escrever, revisar ou validar um manifest, ou ao perguntar se um manifesto está no padrão — o trabalho acontece no YAML, não no cluster.
 ---
 
 # metacortex-manifest
@@ -27,6 +27,7 @@ Se o workload não expõe `/health` e `/ready`, **documente a decisão de probe*
 - Sem endpoint de saúde → use `httpGet` no endpoint mais próximo de indicar que a app está servindo (ex: `/metrics`, `/`), e justifique.
 - Para liveness, prefira `tcpSocket` a endpoints que dependam de banco; liveness que checa banco reinicia a app quando o banco está lento — não conserta nada e derruba tudo.
 - Se o workload roda migração de banco no `entrypoint` (ex: `flask db upgrade && gunicorn …`), separe a migração em **initContainer** no manifest para que o container principal possa ter `readOnlyRootFilesystem: true`.
+  - O initContainer de migração **importa a aplicação**: toda variável de ambiente e todo diretório gravável que a aplicação exige ao ser importada precisam estar também no initContainer, não só no container principal. Diretório apontado por variável (ex.: `PROMETHEUS_MULTIPROC_DIR`) precisa existir: monte um `emptyDir` no próprio caminho, porque o `emptyDir` de `/tmp` começa vazio. (Lição do fake-shop, que só apareceu ao subir os manifests no Ticket 04.)
 
 ### Passo 2: Decisões obrigatórias antes de escrever
 
@@ -143,7 +144,7 @@ spec:
 trivy config --skip-checks KSV-0125 <diretório-dos-manifests>/
 
 # 2 — Script mecânico: regras de identidade, nomenclatura, probes e segredos
-python3 skill/check-manifest.py <diretório-dos-manifests>/
+python3 <diretório base desta skill>/check-manifest.py <diretório-dos-manifests>/
 ```
 
 Corrija todas as falhas antes de abrir PR.
@@ -167,7 +168,7 @@ Antes de rodar qualquer ferramenta, **abra o repositório do workload** que o ma
 trivy config --skip-checks KSV-0125 <manifesto.yaml>
 
 # Script mecânico — cobre o que o Trivy não pega
-python3 skill/check-manifest.py <manifesto.yaml>
+python3 <diretório base desta skill>/check-manifest.py <manifesto.yaml>
 ```
 
 ### Passo 3: Completar a revisão com julgamento
@@ -204,4 +205,4 @@ Liste cada achado no formato:
 
 ## Arquivo de apoio
 
-Consulte `regras-buckets.md` para a tabela completa de cada regra do padrão → balde (trivy / script / instrução / fora).
+Consulte `<diretório base desta skill>/regras-buckets.md` para a tabela completa de cada regra do padrão → balde (trivy / script / instrução / fora).

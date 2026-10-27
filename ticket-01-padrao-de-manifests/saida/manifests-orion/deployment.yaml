@@ -69,6 +69,12 @@ spec:
                 secretKeyRef:
                   name: orion-fakeshop-db
                   key: db-password
+            # A migração importa index.py, que inicializa o prometheus_flask_exporter
+            # em modo multiprocesso: sem esta variável apontando para um diretório
+            # existente, o `flask db upgrade` aborta antes de migrar.
+            # (Corrigido no Ticket 04, ao subir o fake-shop pela primeira vez.)
+            - name: PROMETHEUS_MULTIPROC_DIR
+              value: /tmp/prometheus
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
@@ -87,6 +93,8 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: prometheus-multiproc
+              mountPath: /tmp/prometheus
       containers:
         - name: fake-shop
           image: registry.metacortex.io/orion/fake-shop:1.0.0
@@ -158,6 +166,12 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            # Diretório das métricas por worker do gunicorn; precisa existir
+            # (o emptyDir de /tmp começa vazio).
+            - name: prometheus-multiproc
+              mountPath: /tmp/prometheus
       volumes:
         - name: tmp
+          emptyDir: {}
+        - name: prometheus-multiproc
           emptyDir: {}

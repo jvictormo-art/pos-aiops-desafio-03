@@ -88,3 +88,19 @@ Tabela completa regra × balde, com justificativa por linha e notas sobre o Triv
 ## Nota sobre o KSV-0125 (falso positivo)
 
 O Trivy (KSV-0125) flageia `registry.metacortex.io` como "untrusted registry". Isso acontece porque o Trivy não tem uma lista de registries confiáveis configurada para este contexto — ele compara contra registries públicos conhecidos. A regra 3.7 do padrão da Metacortex faz o oposto: **exige** que todas as imagens venham de `registry.metacortex.io`. O script verifica essa regra na direção correta. O KSV-0125 é suprimido via `.trivyignore` em todos os diretórios de manifests.
+
+---
+
+## Correção encontrada ao usar os manifests no Ticket 04
+
+Os manifests do fake-shop gerados aqui só foram executados de verdade no Ticket 04 (antes, o pod parava em `Init:ErrImagePull`, porque `registry.metacortex.io` não existe fora da ficção do parque, e o defeito ficava escondido). Ao espelhar a imagem no cluster de laboratório, o initContainer de migração falhou:
+
+```
+ValueError: one of env PROMETHEUS_MULTIPROC_DIR or env prometheus_multiproc_dir must be set and be a directory
+```
+
+**Causa:** `flask db upgrade` importa `index.py`, que inicializa o `prometheus_flask_exporter` em modo multiprocesso. A variável estava só no container principal, e o diretório `/tmp/prometheus` nem existia no `emptyDir` de `/tmp`, então o container principal falharia do mesmo jeito.
+
+**Correção no manifest** (`saida/manifests-orion/deployment.yaml`): a variável também no initContainer e um `emptyDir` próprio montado em `/tmp/prometheus` nos dois containers. Com isso, o fake-shop sobe e responde HTTP 200 no cluster de laboratório.
+
+**Correção na skill:** o Passo 1 do `SKILL.md` ganhou a regra de que o initContainer de migração importa a aplicação e precisa das mesmas variáveis e diretórios que ela exige. É a mesma origem de toda a skill: um fluxo executado de verdade, desta vez revelando uma lacuna.
