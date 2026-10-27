@@ -16,15 +16,20 @@ Saída: stdout (JSON e/ou Markdown). Erros: stderr.
 Códigos de saída:
   0  — host alcançado, sem desvios confirmados
   1  — host alcançado, há desvios
-  2  — falha de conexão (host inalcançável, chave recusada, timeout)
-  3  — erro interno (baseline inválido, argumento ausente)
+  2  — falha de conexão (endereço que não resolve, SSH fora do ar, timeout, chave recusada)
+  3  — erro de uso (baseline inválido, chave ausente/ilegível/com senha, argumento faltando)
+
+Dado que não pôde ser coletado vira nao_verificado com motivo (ADR-002); a
+conformidade tem exatamente uma entrada por regra do baseline (ADR-005).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import socket
 import sys
 from datetime import datetime, timezone
 
@@ -43,13 +48,21 @@ except ImportError as e:
 #  SSH
 # ──────────────────────────────────────────────────────────────────
 
+class ErroDeUso(Exception):
+    """Problema na chamada (não no host): sai com código 3."""
+
+
 class SSHConexao:
-    """Encapsula a conexão SSH. A chave privada nunca é exposta em logs ou erros."""
+    """Encapsula a conexão SSH. A chave privada nunca é exposta em logs ou erros.
+
+    Cada tipo de falha vira uma mensagem que diz o que houve (ADR-004).
+    """
 
     def __init__(self, host: str, usuario: str, chave_path: str, porta: int = 22):
         self.host = host
         self._client = paramiko.SSHClient()
         self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        alvo = f"{host}:{porta}"
         try:
             self._client.connect(
                 hostname=host,
@@ -57,15 +70,25 @@ class SSHConexao:
                 key_filename=chave_path,
                 port=porta,
                 timeout=10,
+                banner_timeout=10,
+                auth_timeout=10,
                 allow_agent=False,
                 look_for_keys=False,
             )
+        except paramiko.PasswordRequiredException:
+            raise ErroDeUso("a chave privada está protegida por senha; use uma chave sem senha para a auditoria")
         except paramiko.AuthenticationException:
-            raise ConnectionError(f"Autenticação recusada em {host}:{porta} — verifique usuário e chave")
+            raise ConnectionError(f"autenticação recusada em {alvo}: o host não aceitou o usuário ou a chave")
+        except socket.gaierror:
+            raise ConnectionError(f"endereço não resolve: {host}")
+        except (paramiko.ssh_exception.NoValidConnectionsError, ConnectionRefusedError):
+            raise ConnectionError(f"conexão recusada em {alvo}: nada escuta na porta SSH (serviço fora do ar?)")
+        except socket.timeout:
+            raise ConnectionError(f"tempo esgotado ao conectar em {alvo}: host desligado, inexistente ou filtrado")
         except paramiko.SSHException as e:
-            raise ConnectionError(f"Falha SSH em {host}:{porta} — {e}")
+            raise ConnectionError(f"falha no protocolo SSH com {alvo}: {e}")
         except OSError as e:
-            raise ConnectionError(f"Host inalcançável: {host} — {e}")
+            raise ConnectionError(f"host inalcançável: {alvo} ({e.strerror or type(e).__name__})")
 
     def executar(self, cmd: str) -> tuple[str, int]:
         """Executa um comando de leitura no host remoto. Retorna (stdout, exit_code)."""
@@ -206,19 +229,16 @@ class Coletor:
             chaves.append({"identificacao": identificacao})
         return chaves
 
-    def ssh_config(self) -> dict:
-        """Tenta ler a configuração efetiva do sshd. Requer privilégio elevado."""
+    def ssh_config(self) -> dict | None:
+        """Configuração efetiva do sshd (`sshd -T`). Exige privilégio; sem ele, None."""
         saida, codigo = self._run("sshd -T 2>/dev/null | grep -i permitrootlogin")
-        if codigo != 0 or not saida.strip():
-            return {"login_de_root": None, "_nao_verificado": True}
-        m = re.search(r'permitrootlogin\s+(\S+)', saida, re.IGNORECASE)
+        m = re.search(r'permitrootlogin\s+(\S+)', saida, re.IGNORECASE) if codigo == 0 else None
         if not m:
-            return {"login_de_root": None, "_nao_verificado": True}
+            return None
         valor = m.group(1).lower()
-        login_permitido = valor in ("yes", "without-password", "prohibit-password")
-        return {"login_de_root": login_permitido}
+        return {"login_de_root": valor in ("yes", "without-password", "prohibit-password")}
 
-    def ntp(self) -> dict:
+    def ntp(self) -> dict | None:
         saida, codigo = self._run(
             "timedatectl show --property=NTPSynchronized,NTPService 2>/dev/null"
         )
@@ -233,32 +253,73 @@ class Coletor:
                     elif k.strip() == "NTPService":
                         mecanismo = v.strip() or None
         if sincronizado is None:
-            # Fallback: timedatectl status
-            saida2, _ = self._run("timedatectl status 2>/dev/null")
-            for linha in saida2.splitlines():
-                linha_l = linha.lower()
-                if "synchronized:" in linha_l or "system clock synchronized" in linha_l:
-                    sincronizado = "yes" in linha_l
+            # Reserva: timedatectl status
+            saida2, codigo2 = self._run("timedatectl status 2>/dev/null")
+            if codigo2 == 0:
+                for linha in saida2.splitlines():
+                    linha_l = linha.lower()
+                    if "synchronized:" in linha_l or "system clock synchronized" in linha_l:
+                        sincronizado = "yes" in linha_l
+        if sincronizado is None:
+            return None
         return {"sincronizado": sincronizado, "mecanismo": mecanismo}
 
+    # Motivo de cada item quando o coletor devolve None.
+    MOTIVOS = {
+        "so": "/etc/os-release nao legivel",
+        "kernel": "uname -r falhou",
+        "servicos": "systemd nao disponivel ou nao acessivel",
+        "swap": "/proc/swaps nao legivel",
+        "portas_em_escuta": "comando ss nao disponivel ou falhou",
+        "chaves_ssh": "authorized_keys existe mas nao pode ser lido",
+        "ssh": "exige privilegio que o usuario da coleta nao tem",
+        "ntp": "timedatectl nao disponivel",
+    }
+
+    def _coletar(self, item: str, coletor, motivos: dict):
+        """Roda um coletor isolado: erro inesperado num item não derruba os outros."""
+        try:
+            valor = coletor()
+        except Exception as e:  # noqa: BLE001 — o motivo registra o tipo do erro
+            motivos[item] = f"falha inesperada na coleta ({type(e).__name__})"
+            return None
+        if valor is None:
+            motivos[item] = self.MOTIVOS[item]
+        return valor
+
     def coletar_tudo(self, host_address: str) -> dict:
-        lista_svc = self.servicos()
+        coletado_em = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            hostname, codigo = self._run("hostname")
+        except Exception:  # noqa: BLE001 — hostname não é regra do baseline
+            hostname, codigo = "", 1
+        motivos: dict[str, str] = {}
+        inv = {
+            item: self._coletar(item, coletor, motivos)
+            for item, coletor in (
+                ("so", self.so),
+                ("kernel", self.kernel),
+                ("servicos", self.servicos),
+                ("swap", self.swap),
+                ("portas_em_escuta", self.portas),
+                ("chaves_ssh", self.chaves_ssh),
+                ("ssh", self.ssh_config),
+                ("ntp", self.ntp),
+            )
+        }
+        # Forma do enunciado para os itens não coletados de ssh e ntp.
+        if inv["ssh"] is None:
+            inv["ssh"] = {"login_de_root": None}
+        if inv["ntp"] is None:
+            inv["ntp"] = {"sincronizado": None, "mecanismo": None}
         return {
             "host": {
                 "endereco": host_address,
-                "hostname": self._run("hostname")[0] or host_address,
-                "coletado_em": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "hostname": (hostname if codigo == 0 else "") or host_address,
+                "coletado_em": coletado_em,
             },
-            "inventario": {
-                "so": self.so(),
-                "kernel": self.kernel(),
-                "servicos": lista_svc,
-                "swap": self.swap(),
-                "portas_em_escuta": self.portas(),
-                "chaves_ssh": self.chaves_ssh(),
-                "ssh": self.ssh_config(),
-                "ntp": self.ntp(),
-            },
+            "inventario": inv,
+            "_motivos": motivos,
         }
 
 
@@ -266,21 +327,29 @@ class Coletor:
 #  AUDITORIA
 # ──────────────────────────────────────────────────────────────────
 
+WILDCARDS = {"0.0.0.0", "::", "*", ""}
+
+
 def _versao_tuple(v: str) -> tuple:
     """'5.15.0-118-generic' → (5, 15, 0). '22.04' → (22, 4)."""
     partes = re.findall(r'\d+', str(v))
     return tuple(int(x) for x in partes[:3]) if partes else (0,)
 
 
-def auditar(baseline: dict, dados: dict) -> list[dict]:
-    """Compara inventário com baseline. Retorna lista de entradas de conformidade.
+def _lista(itens) -> str:
+    return ", ".join(str(i) for i in itens)
 
-    Todo dado que a coleta devolveu como None vira nao_verificado — a ausência
-    de dado nunca é tratada como conformidade.
+
+def auditar(baseline: dict, dados: dict) -> list[dict]:
+    """Compara inventário com baseline: exatamente uma entrada por regra (ADR-005).
+
+    Dado não coletado (None no inventário) vira nao_verificado com o motivo
+    registrado na coleta (ADR-002) — nunca conforme, nunca desvio.
     """
     esperado = baseline.get("esperado", {})
     severidades = baseline.get("severidade", {})
     inv = dados["inventario"]
+    motivos = dados.get("_motivos", {})
 
     def sev(regra: str) -> str:
         for nivel, regras in severidades.items():
@@ -294,8 +363,9 @@ def auditar(baseline: dict, dados: dict) -> list[dict]:
     def desvio(regra, esp, enc):
         return {"regra": regra, "esperado": esp, "encontrado": enc, "veredito": "desvio", "severidade": sev(regra)}
 
-    def nv(regra, esp, motivo):
-        return {"regra": regra, "esperado": esp, "encontrado": None, "veredito": "nao_verificado", "motivo": motivo}
+    def nv(regra, esp, item):
+        return {"regra": regra, "esperado": esp, "encontrado": None, "veredito": "nao_verificado",
+                "motivo": motivos.get(item, Coletor.MOTIVOS[item])}
 
     resultado = []
 
@@ -304,9 +374,8 @@ def auditar(baseline: dict, dados: dict) -> list[dict]:
     versao_min = esperado.get("so", {}).get("versao_minima")
     so = inv["so"]
     if so is None:
-        motivo = "/etc/os-release nao legivel"
-        resultado.append(nv("so.distribuicao", dist_esp, motivo))
-        resultado.append(nv("so.versao_minima", versao_min, motivo))
+        resultado.append(nv("so.distribuicao", dist_esp, "so"))
+        resultado.append(nv("so.versao_minima", versao_min, "so"))
     else:
         resultado.append(ok("so.distribuicao", dist_esp, so["distribuicao"])
                          if so["distribuicao"] == dist_esp
@@ -318,41 +387,39 @@ def auditar(baseline: dict, dados: dict) -> list[dict]:
     # ── kernel.versao_minima ──
     kernel_min = esperado.get("kernel", {}).get("versao_minima")
     if inv["kernel"] is None:
-        resultado.append(nv("kernel.versao_minima", kernel_min, "uname -r falhou"))
+        resultado.append(nv("kernel.versao_minima", kernel_min, "kernel"))
     else:
         kernel_enc = inv["kernel"]["versao"]
         resultado.append(ok("kernel.versao_minima", kernel_min, kernel_enc)
                          if _versao_tuple(kernel_enc) >= _versao_tuple(kernel_min)
                          else desvio("kernel.versao_minima", kernel_min, kernel_enc))
 
-    # ── servicos.ativos / servicos.proibidos ──
+    # ── servicos.ativos / servicos.proibidos (agregados por regra) ──
     servicos = inv["servicos"]
-    motivo_svc = "systemd nao disponivel ou nao acessivel"
-    servicos_enc = {s["nome"] for s in servicos} if servicos is not None else set()
-    for svc in esperado.get("servicos", {}).get("ativos", []):
-        if servicos is None:
-            resultado.append(nv("servicos.ativos", f"{svc} ativo", motivo_svc))
-            continue
-        nome_full = svc if "." in svc else f"{svc}.service"
-        presente = nome_full in servicos_enc or svc in servicos_enc
-        resultado.append(ok("servicos.ativos", f"{svc} ativo", "presente")
-                         if presente
-                         else desvio("servicos.ativos", f"{svc} ativo", "ausente"))
+    ativos = esperado.get("servicos", {}).get("ativos", [])
+    proibidos = esperado.get("servicos", {}).get("proibidos", [])
+    esp_ativos = f"{_lista(ativos)} ativos"
+    esp_proibidos = f"{_lista(proibidos)} inativos"
+    if servicos is None:
+        resultado.append(nv("servicos.ativos", esp_ativos, "servicos"))
+        resultado.append(nv("servicos.proibidos", esp_proibidos, "servicos"))
+    else:
+        nomes = {s["nome"] for s in servicos}
 
-    for svc in esperado.get("servicos", {}).get("proibidos", []):
-        if servicos is None:
-            resultado.append(nv("servicos.proibidos", f"{svc} inativo", motivo_svc))
-            continue
-        nome_full = svc if "." in svc else f"{svc}.socket"
-        presente = nome_full in servicos_enc or svc in servicos_enc
-        resultado.append(desvio("servicos.proibidos", f"{svc} inativo", "presente")
-                         if presente
-                         else ok("servicos.proibidos", f"{svc} inativo", "ausente"))
+        def presente(svc: str, tipo_padrao: str) -> bool:
+            return svc in nomes or (f"{svc}.{tipo_padrao}" in nomes if "." not in svc else False)
+
+        ausentes = [s for s in ativos if not presente(s, "service")]
+        resultado.append(desvio("servicos.ativos", esp_ativos, f"ausente: {_lista(ausentes)}")
+                         if ausentes else ok("servicos.ativos", esp_ativos, "todos ativos"))
+        ligados = [s for s in proibidos if presente(s, "socket")]
+        resultado.append(desvio("servicos.proibidos", esp_proibidos, f"ativo: {_lista(ligados)}")
+                         if ligados else ok("servicos.proibidos", esp_proibidos, "nenhum ativo"))
 
     # ── swap.habilitado ──
     swap_esp = esperado.get("swap", {}).get("habilitado")
     if inv["swap"] is None:
-        resultado.append(nv("swap.habilitado", swap_esp, "/proc/swaps nao legivel"))
+        resultado.append(nv("swap.habilitado", swap_esp, "swap"))
     else:
         swap_enc = inv["swap"]["habilitado"]
         tamanho = inv["swap"].get("tamanho")
@@ -362,98 +429,63 @@ def auditar(baseline: dict, dados: dict) -> list[dict]:
                          else desvio("swap.habilitado", swap_esp, enc_str))
 
     # ── portas_em_escuta.* ──
-    publicas_perm = set(esperado.get("portas_em_escuta", {}).get("publicas_permitidas", []))
+    publicas_perm = esperado.get("portas_em_escuta", {}).get("publicas_permitidas", [])
     somente_int = esperado.get("portas_em_escuta", {}).get("somente_rede_interna", [])
+    esp_pub = f"apenas {_lista(publicas_perm)} em endereço público"
+    esp_int = f"{_lista(somente_int)} na rede interna"
     portas = inv["portas_em_escuta"]
-    WILDCARDS = {"0.0.0.0", "::", "*", ""}
     if portas is None:
-        motivo = "comando ss nao disponivel ou falhou"
-        resultado.append(nv("portas_em_escuta.publicas_permitidas",
-                            f"apenas {sorted(publicas_perm)} públicas", motivo))
-        for porta in somente_int:
-            resultado.append(nv("portas_em_escuta.somente_rede_interna",
-                                f"{porta} somente rede interna", motivo))
+        resultado.append(nv("portas_em_escuta.publicas_permitidas", esp_pub, "portas_em_escuta"))
+        resultado.append(nv("portas_em_escuta.somente_rede_interna", esp_int, "portas_em_escuta"))
     else:
-        portas_pub = [p for p in portas if p["bind"] in WILDCARDS]
-        nao_perm = [p for p in portas_pub if p["porta"] not in publicas_perm]
-        if nao_perm:
-            enc = ", ".join(f"{p['porta']} em {p['bind']}" for p in nao_perm)
-            resultado.append(desvio(
-                "portas_em_escuta.publicas_permitidas",
-                f"apenas {sorted(publicas_perm)} públicas",
-                f"não permitidas expostas: {enc}",
-            ))
-        else:
-            resultado.append(ok(
-                "portas_em_escuta.publicas_permitidas",
-                f"apenas {sorted(publicas_perm)} públicas",
-                "nenhuma porta não autorizada em endereço público",
-            ))
+        nao_perm = [p for p in portas if p["bind"] in WILDCARDS and p["porta"] not in publicas_perm]
+        resultado.append(
+            desvio("portas_em_escuta.publicas_permitidas", esp_pub,
+                   _lista(f"{p['porta']} em {p['bind'] or '*'}" for p in nao_perm))
+            if nao_perm else
+            ok("portas_em_escuta.publicas_permitidas", esp_pub, "nenhuma outra porta pública"))
 
+        vazadas, situacao = [], []
         for porta in somente_int:
-            enc_lista = [p for p in portas if p["porta"] == porta]
-            vazadas = [p for p in enc_lista if p["bind"] in WILDCARDS]
-            if vazadas:
-                resultado.append(desvio(
-                    "portas_em_escuta.somente_rede_interna",
-                    f"{porta} somente rede interna",
-                    f"{porta} exposta em {vazadas[0]['bind']}",
-                ))
-            elif enc_lista:
-                resultado.append(ok(
-                    "portas_em_escuta.somente_rede_interna",
-                    f"{porta} somente rede interna",
-                    f"{porta} em {enc_lista[0]['bind']}",
-                ))
-            else:
-                resultado.append(ok(
-                    "portas_em_escuta.somente_rede_interna",
-                    f"{porta} somente rede interna",
-                    f"{porta} não encontrada em escuta",
-                ))
+            binds = [p["bind"] for p in portas if p["porta"] == porta]
+            publicos = [b for b in binds if b in WILDCARDS]
+            if publicos:
+                vazadas.append(f"{porta} em {publicos[0] or '*'}")
+            situacao.append(f"{porta} em {binds[0]}" if binds else f"{porta} sem escuta")
+        resultado.append(desvio("portas_em_escuta.somente_rede_interna", esp_int, _lista(vazadas))
+                         if vazadas else
+                         ok("portas_em_escuta.somente_rede_interna", esp_int, _lista(situacao)))
 
     # ── chaves_ssh.emitidas_por ──
     emitidas_por = esperado.get("chaves_ssh", {}).get("emitidas_por", "")
     esp_chaves = f"todas emitidas por {emitidas_por}"
     chaves = inv["chaves_ssh"]
     if chaves is None:
-        resultado.append(nv("chaves_ssh.emitidas_por", esp_chaves,
-                            "authorized_keys existe mas nao pode ser lido"))
+        resultado.append(nv("chaves_ssh.emitidas_por", esp_chaves, "chaves_ssh"))
     elif not chaves:
-        resultado.append(desvio("chaves_ssh.emitidas_por", esp_chaves,
-                                "nenhuma chave em authorized_keys"))
+        resultado.append(desvio("chaves_ssh.emitidas_por", esp_chaves, "nenhuma chave em authorized_keys"))
     else:
-        estranhas = [c for c in chaves if emitidas_por not in c["identificacao"]]
-        if estranhas:
-            ids = [c["identificacao"] for c in estranhas]
-            resultado.append(desvio(
-                "chaves_ssh.emitidas_por", esp_chaves,
-                f"{len(estranhas)} chave(s) não reconhecida(s): {ids}",
-            ))
-        else:
-            resultado.append(ok(
-                "chaves_ssh.emitidas_por", esp_chaves,
-                f"{len(chaves)} chave(s), todas com identificação correta",
-            ))
+        estranhas = [c["identificacao"] for c in chaves if emitidas_por not in c["identificacao"]]
+        resultado.append(
+            desvio("chaves_ssh.emitidas_por", esp_chaves, f"não reconhecida(s): {_lista(estranhas)}")
+            if estranhas else
+            ok("chaves_ssh.emitidas_por", esp_chaves, f"{len(chaves)} chave(s), todas da plataforma"))
 
     # ── ssh.login_de_root ──
-    ssh_cfg = inv["ssh"]
-    if ssh_cfg.get("_nao_verificado"):
-        resultado.append(nv(
-            "ssh.login_de_root", False,
-            "exige privilegio que o usuario da coleta nao tem",
-        ))
+    root_esp = esperado.get("ssh", {}).get("login_de_root")
+    login_root = inv["ssh"]["login_de_root"]
+    if login_root is None:
+        resultado.append(nv("ssh.login_de_root", root_esp, "ssh"))
     else:
-        login_root = ssh_cfg.get("login_de_root")
-        resultado.append(ok("ssh.login_de_root", False, login_root)
-                         if login_root is False
-                         else desvio("ssh.login_de_root", False, login_root))
+        resultado.append(ok("ssh.login_de_root", root_esp, login_root)
+                         if login_root == root_esp
+                         else desvio("ssh.login_de_root", root_esp, login_root))
 
     # ── ntp.sincronizado ──
     ntp_esp = esperado.get("ntp", {}).get("sincronizado")
     ntp_enc = inv["ntp"]["sincronizado"]
     if ntp_enc is None:
-        resultado.append(nv("ntp.sincronizado", ntp_esp, "timedatectl nao disponivel"))
+        resultado.append(nv("ntp.sincronizado", ntp_esp, "ntp"))
     else:
         resultado.append(ok("ntp.sincronizado", ntp_esp, ntp_enc)
                          if ntp_enc == ntp_esp
@@ -489,7 +521,6 @@ def _limpar_meta(obj):
 
 def renderizar_json(dados: dict, conformidade: list[dict]) -> str:
     saida = _limpar_meta(dados)
-    saida.pop("_meta", None)
     saida["conformidade"] = conformidade
     saida["resumo"] = resumir(conformidade)
     return json.dumps(saida, ensure_ascii=False, indent=2)
@@ -506,60 +537,63 @@ def _fmt(v) -> str:
     return str(v)
 
 
+# O JSON mantém o motivo sem acento, como no exemplo do enunciado; o Markdown,
+# lido por gente, acentua (também como no exemplo).
+_ACENTOS = {"privilegio": "privilégio", "usuario": "usuário", "nao": "não",
+            "disponivel": "disponível", "acessivel": "acessível", "legivel": "legível"}
+
+
+def _acentuar(texto: str) -> str:
+    return re.sub(r"\b(" + "|".join(_ACENTOS) + r")\b", lambda m: _ACENTOS[m.group(1)], texto)
+
+
+_SEV_ORDEM = {"critico": 0, "alto": 1, "medio": 2, "info": 3}
+_SEV_PT = {"critico": "crítico", "alto": "alto", "medio": "médio", "info": "info"}
+
+
 def renderizar_markdown(dados: dict, conformidade: list[dict]) -> str:
     host = dados["host"]
     resumo = resumir(conformidade)
-    ts = host["coletado_em"].replace("T", " ").replace("Z", " UTC")
+    ts = host["coletado_em"][:16].replace("T", " ")
 
-    desvios = [c for c in conformidade if c["veredito"] == "desvio"]
+    desvios = sorted((c for c in conformidade if c["veredito"] == "desvio"),
+                     key=lambda c: _SEV_ORDEM.get(c.get("severidade", "info"), 99))
     nao_vs = [c for c in conformidade if c["veredito"] == "nao_verificado"]
-    conformes = [c for c in conformidade if c["veredito"] == "conforme"]
+    conformes = [c["regra"] for c in conformidade if c["veredito"] == "conforme"]
 
     linhas = [
-        f"# Inventário — {host['hostname']} ({host['endereco']})",
-        f"Coletado em {ts} · baseline v{dados.get('_baseline_versao', 1)}",
+        f"# Inventário de {host['hostname']} ({host['endereco']})",
+        f"Coletado em {ts} UTC · baseline v{dados.get('_baseline_versao', 1)}",
+        "",
+        "## Desvios",
         "",
     ]
-
-    linhas += ["## Desvios", ""]
     if desvios:
-        _sev_ord = {"critico": 0, "alto": 1, "medio": 2, "info": 3}
-        desvios_s = sorted(desvios, key=lambda c: _sev_ord.get(c.get("severidade", "info"), 99))
-        _sev_pt = {"critico": "crítico", "alto": "alto", "medio": "médio", "info": "info"}
         linhas += ["| Severidade | Regra | Esperado | Encontrado |", "|---|---|---|---|"]
-        for c in desvios_s:
-            s = _sev_pt.get(c.get("severidade", "info"), c.get("severidade", ""))
-            linhas.append(f"| {s} | {c['regra']} | {_fmt(c['esperado'])} | {_fmt(c['encontrado'])} |")
+        for c in desvios:
+            sev = _SEV_PT.get(c.get("severidade", "info"), c.get("severidade", ""))
+            linhas.append(f"| {sev} | {c['regra']} | {_fmt(c['esperado'])} | {_fmt(c['encontrado'])} |")
     else:
         linhas.append("*Nenhum desvio encontrado.*")
     linhas.append("")
 
     if nao_vs:
-        linhas += ["## Não verificado", ""]
-        linhas += ["| Regra | Esperado | Motivo |", "|---|---|---|"]
+        linhas += ["## Não verificado", "", "| Regra | Motivo |", "|---|---|"]
         for c in nao_vs:
-            linhas.append(f"| {c['regra']} | {_fmt(c['esperado'])} | {c.get('motivo', '')} |")
+            linhas.append(f"| {c['regra']} | {_acentuar(c.get('motivo', ''))} |")
         linhas.append("")
 
     if conformes:
-        linhas += ["## Conforme", ""]
-        # Deduplicate rule names while preserving order
-        seen: set = set()
-        nomes_uniq = []
-        for c in conformes:
-            if c["regra"] not in seen:
-                seen.add(c["regra"])
-                nomes_uniq.append(c["regra"])
-        linhas.append(" · ".join(nomes_uniq))
-        linhas.append("")
+        linhas += ["## Conforme", " · ".join(conformes), ""]
 
     linhas += [
         "---",
-        f"**Resumo**: {resumo['conforme']} conforme · {resumo['desvio']} desvio · {resumo['nao_verificado']} não verificado",
+        f"**Resumo**: {resumo['conforme']} conforme · {resumo['desvio']} desvio · "
+        f"{resumo['nao_verificado']} não verificado",
     ]
-    if resumo.get("por_severidade"):
-        _pt = {"critico": "crítico", "alto": "alto", "medio": "médio"}
-        partes = [f"{v} {_pt.get(k, k)}" for k, v in resumo["por_severidade"].items()]
+    if resumo["por_severidade"]:
+        partes = [f"{v} {_SEV_PT.get(k, k)}"
+                  for k, v in sorted(resumo["por_severidade"].items(), key=lambda kv: _SEV_ORDEM.get(kv[0], 99))]
         linhas.append(f"**Por severidade**: {' · '.join(partes)}")
 
     return "\n".join(linhas)
@@ -569,8 +603,18 @@ def renderizar_markdown(dados: dict, conformidade: list[dict]) -> str:
 #  MAIN
 # ──────────────────────────────────────────────────────────────────
 
+def _sair(mensagem: str, codigo: int):
+    print(mensagem, file=sys.stderr)
+    sys.exit(codigo)
+
+
 def main():
-    parser = argparse.ArgumentParser(
+    class _Parser(argparse.ArgumentParser):
+        def error(self, message):  # argparse sairia com 2, que aqui é falha de conexão
+            self.print_usage(sys.stderr)
+            _sair(f"Erro de uso: {message}", 3)
+
+    parser = _Parser(
         description="Audita uma VM contra baseline.yaml via SSH. Apenas leitura.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -583,45 +627,44 @@ def main():
     parser.add_argument("--porta", type=int, default=22, help="Porta SSH (padrão: 22)")
     args = parser.parse_args()
 
-    # Carregar baseline
+    # Baseline
     try:
         with open(args.baseline) as f:
             baseline = yaml.safe_load(f)
     except FileNotFoundError:
-        print(f"Erro: baseline não encontrado: {args.baseline}", file=sys.stderr)
-        sys.exit(3)
-    except yaml.YAMLError as e:
-        print(f"Erro: baseline inválido — {e}", file=sys.stderr)
-        sys.exit(3)
+        _sair(f"Erro: baseline não encontrado: {args.baseline}", 3)
+    except yaml.YAMLError:
+        _sair(f"Erro: baseline inválido (YAML mal formado): {args.baseline}", 3)
+    if not isinstance(baseline, dict) or "esperado" not in baseline:
+        _sair(f"Erro: baseline inválido (sem o bloco 'esperado'): {args.baseline}", 3)
 
-    # Conectar
-    ssh = None
+    # Chave: erro de uso, verificado antes de conectar. Nem o caminho nem o
+    # conteúdo da chave aparecem na mensagem.
+    if not (os.path.isfile(args.key) and os.access(args.key, os.R_OK)):
+        _sair("Erro: o arquivo da chave privada informado em --key não existe ou não pode ser lido", 3)
+
+    # Conexão
     try:
         ssh = SSHConexao(args.host, args.user, args.key, args.porta)
+    except ErroDeUso as e:
+        _sair(f"Erro: {e}", 3)
     except ConnectionError as e:
-        print(f"Erro de conexão: {e}", file=sys.stderr)
-        sys.exit(2)
+        _sair(f"Erro de conexão: {e}", 2)
 
-    # Coletar
+    # Coleta: cada item é isolado no Coletor; este try só pega o inesperado fora deles.
     try:
-        coletor = Coletor(ssh)
-        dados = coletor.coletar_tudo(args.host)
+        dados = Coletor(ssh).coletar_tudo(args.host)
         dados["_baseline_versao"] = baseline.get("versao", 1)
-    except Exception as e:
-        print(f"Erro durante coleta: {e}", file=sys.stderr)
-        sys.exit(3)
+    except Exception as e:  # noqa: BLE001
+        _sair(f"Erro durante a coleta: {type(e).__name__}", 3)
     finally:
-        if ssh:
-            ssh.fechar()
+        ssh.fechar()
 
-    # Auditar
     try:
         conformidade = auditar(baseline, dados)
-    except Exception as e:
-        print(f"Erro durante auditoria: {e}", file=sys.stderr)
-        sys.exit(3)
+    except Exception as e:  # noqa: BLE001
+        _sair(f"Erro durante a auditoria: {type(e).__name__}: {e}", 3)
 
-    # Renderizar
     if args.fmt in ("json", "both"):
         print(renderizar_json(dados, conformidade))
     if args.fmt == "both":
@@ -629,9 +672,11 @@ def main():
     if args.fmt in ("md", "both"):
         print(renderizar_markdown(dados, conformidade))
 
-    # Exit code
     sys.exit(1 if resumir(conformidade)["desvio"] > 0 else 0)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        _sair("Interrompido.", 130)

@@ -1,0 +1,8 @@
+$ python3 inventario.py --host 192.168.64.2 --user auditor
+[código de retorno: 3]
+--- stdout ---
+--- stderr ---
+usage: inventario.py [-h] --host HOST --user USER --key KEY
+                     [--baseline BASELINE] [--format {json,md,both}]
+                     [--porta PORTA]
+Erro de uso: the following arguments are required: --key

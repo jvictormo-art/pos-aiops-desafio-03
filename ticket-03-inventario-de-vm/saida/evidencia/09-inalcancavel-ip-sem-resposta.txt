@@ -1,0 +1,5 @@
+$ python3 inventario.py --host 192.168.64.250 --user auditor --key <chave-auditor>
+[código de retorno: 2]
+--- stdout ---
+--- stderr ---
+Erro de conexão: tempo esgotado ao conectar em 192.168.64.250:22: host desligado, inexistente ou filtrado

@@ -1,0 +1,12 @@
+Execução 1 coletada em: 2026-10-27T17:04:50Z
+Execução 2 coletada em: 2026-10-27T17:04:51Z
+conformidade idêntica: True
+resumo idêntico:       True
+resumo: {"conforme": 10, "desvio": 0, "nao_verificado": 1, "por_severidade": {}}
+inventario.so idêntico: True
+inventario.kernel idêntico: True
+inventario.swap idêntico: True
+inventario.portas_em_escuta idêntico: True
+inventario.chaves_ssh idêntico: True
+inventario.ssh idêntico: True
+inventario.ntp idêntico: True

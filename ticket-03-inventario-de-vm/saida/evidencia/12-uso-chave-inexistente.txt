@@ -1,0 +1,5 @@
+$ python3 inventario.py --host 192.168.64.2 --user auditor --key /caminho/que/nao/existe
+[código de retorno: 3]
+--- stdout ---
+--- stderr ---
+Erro: o arquivo da chave privada informado em --key não existe ou não pode ser lido

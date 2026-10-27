@@ -1,0 +1,30 @@
+$ python3 inventario.py --host 127.0.0.1 --porta 2223 --user auditor --key <chave-auditor> --format md
+[código de retorno: 1]
+--- stdout ---
+# Inventário de 878747d2fcce (127.0.0.1)
+Coletado em 2026-10-27 17:04 UTC · baseline v1
+
+## Desvios
+
+| Severidade | Regra | Esperado | Encontrado |
+|---|---|---|---|
+| crítico | swap.habilitado | false | true (1024M) |
+
+## Não verificado
+
+| Regra | Motivo |
+|---|---|
+| servicos.ativos | systemd não disponível ou não acessível |
+| servicos.proibidos | systemd não disponível ou não acessível |
+| portas_em_escuta.publicas_permitidas | comando ss não disponível ou falhou |
+| portas_em_escuta.somente_rede_interna | comando ss não disponível ou falhou |
+| ssh.login_de_root | exige privilégio que o usuário da coleta não tem |
+| ntp.sincronizado | timedatectl não disponível |
+
+## Conforme
+so.distribuicao · so.versao_minima · kernel.versao_minima · chaves_ssh.emitidas_por
+
+---
+**Resumo**: 4 conforme · 1 desvio · 6 não verificado
+**Por severidade**: 1 crítico
+--- stderr ---

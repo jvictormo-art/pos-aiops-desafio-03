@@ -1,0 +1,121 @@
+$ python3 inventario.py --host 127.0.0.1 --porta 2223 --user auditor --key <chave-auditor> --format json
+[código de retorno: 1]
+--- stdout ---
+{
+  "host": {
+    "endereco": "127.0.0.1",
+    "hostname": "878747d2fcce",
+    "coletado_em": "2026-10-27T17:04:53Z"
+  },
+  "inventario": {
+    "so": {
+      "distribuicao": "ubuntu",
+      "versao": "22.04"
+    },
+    "kernel": {
+      "versao": "6.12.76-linuxkit"
+    },
+    "servicos": null,
+    "swap": {
+      "habilitado": true,
+      "tamanho": "1024M"
+    },
+    "portas_em_escuta": null,
+    "chaves_ssh": [
+      {
+        "identificacao": "metacortex-platform"
+      }
+    ],
+    "ssh": {
+      "login_de_root": null
+    },
+    "ntp": {
+      "sincronizado": null,
+      "mecanismo": null
+    }
+  },
+  "conformidade": [
+    {
+      "regra": "so.distribuicao",
+      "esperado": "ubuntu",
+      "encontrado": "ubuntu",
+      "veredito": "conforme"
+    },
+    {
+      "regra": "so.versao_minima",
+      "esperado": "22.04",
+      "encontrado": "22.04",
+      "veredito": "conforme"
+    },
+    {
+      "regra": "kernel.versao_minima",
+      "esperado": "6.5",
+      "encontrado": "6.12.76-linuxkit",
+      "veredito": "conforme"
+    },
+    {
+      "regra": "servicos.ativos",
+      "esperado": "ssh, containerd, node_exporter, chrony ativos",
+      "encontrado": null,
+      "veredito": "nao_verificado",
+      "motivo": "systemd nao disponivel ou nao acessivel"
+    },
+    {
+      "regra": "servicos.proibidos",
+      "esperado": "telnet.socket, rpcbind.socket inativos",
+      "encontrado": null,
+      "veredito": "nao_verificado",
+      "motivo": "systemd nao disponivel ou nao acessivel"
+    },
+    {
+      "regra": "swap.habilitado",
+      "esperado": false,
+      "encontrado": "true (1024M)",
+      "veredito": "desvio",
+      "severidade": "critico"
+    },
+    {
+      "regra": "portas_em_escuta.publicas_permitidas",
+      "esperado": "apenas 22 em endereço público",
+      "encontrado": null,
+      "veredito": "nao_verificado",
+      "motivo": "comando ss nao disponivel ou falhou"
+    },
+    {
+      "regra": "portas_em_escuta.somente_rede_interna",
+      "esperado": "9100 na rede interna",
+      "encontrado": null,
+      "veredito": "nao_verificado",
+      "motivo": "comando ss nao disponivel ou falhou"
+    },
+    {
+      "regra": "chaves_ssh.emitidas_por",
+      "esperado": "todas emitidas por metacortex-platform",
+      "encontrado": "1 chave(s), todas da plataforma",
+      "veredito": "conforme"
+    },
+    {
+      "regra": "ssh.login_de_root",
+      "esperado": false,
+      "encontrado": null,
+      "veredito": "nao_verificado",
+      "motivo": "exige privilegio que o usuario da coleta nao tem"
+    },
+    {
+      "regra": "ntp.sincronizado",
+      "esperado": true,
+      "encontrado": null,
+      "veredito": "nao_verificado",
+      "motivo": "timedatectl nao disponivel"
+    }
+  ],
+  "resumo": {
+    "conforme": 4,
+    "desvio": 1,
+    "nao_verificado": 6,
+    "por_severidade": {
+      "critico": 1
+    }
+  }
+}
+--- stderr ---

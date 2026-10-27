@@ -1,0 +1,22 @@
+$ python3 inventario.py --host 192.168.64.2 --user auditor --key <chave-auditor> --format md
+[código de retorno: 0]
+--- stdout ---
+# Inventário de lima-metacortex-vm (192.168.64.2)
+Coletado em 2026-10-27 17:04 UTC · baseline v1
+
+## Desvios
+
+*Nenhum desvio encontrado.*
+
+## Não verificado
+
+| Regra | Motivo |
+|---|---|
+| ssh.login_de_root | exige privilégio que o usuário da coleta não tem |
+
+## Conforme
+so.distribuicao · so.versao_minima · kernel.versao_minima · servicos.ativos · servicos.proibidos · swap.habilitado · portas_em_escuta.publicas_permitidas · portas_em_escuta.somente_rede_interna · chaves_ssh.emitidas_por · ntp.sincronizado
+
+---
+**Resumo**: 10 conforme · 0 desvio · 1 não verificado
+--- stderr ---

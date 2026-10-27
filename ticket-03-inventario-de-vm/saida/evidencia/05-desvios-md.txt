@@ -1,0 +1,28 @@
+$ python3 inventario.py --host 127.0.0.1 --porta 2222 --user auditor --key <chave-auditor> --format md
+[código de retorno: 1]
+--- stdout ---
+# Inventário de 7399c2b75d34 (127.0.0.1)
+Coletado em 2026-10-27 17:04 UTC · baseline v1
+
+## Desvios
+
+| Severidade | Regra | Esperado | Encontrado |
+|---|---|---|---|
+| crítico | swap.habilitado | false | true (1024M) |
+| crítico | chaves_ssh.emitidas_por | todas emitidas por metacortex-platform | não reconhecida(s): madrugada@laptop-do-dozer |
+| alto | servicos.ativos | ssh, containerd, node_exporter, chrony ativos | ausente: containerd, node_exporter |
+| médio | ntp.sincronizado | true | false |
+
+## Não verificado
+
+| Regra | Motivo |
+|---|---|
+| ssh.login_de_root | exige privilégio que o usuário da coleta não tem |
+
+## Conforme
+so.distribuicao · so.versao_minima · kernel.versao_minima · servicos.proibidos · portas_em_escuta.publicas_permitidas · portas_em_escuta.somente_rede_interna
+
+---
+**Resumo**: 6 conforme · 4 desvio · 1 não verificado
+**Por severidade**: 2 crítico · 1 alto · 1 médio
+--- stderr ---

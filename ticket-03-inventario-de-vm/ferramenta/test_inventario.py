@@ -10,11 +10,15 @@ Rodar: python3 -m unittest test_inventario.py -v
 """
 
 import os
+import socket
+import subprocess
+import sys
+import tempfile
 import unittest
 
 import yaml
 
-from inventario import Coletor, auditar, resumir
+from inventario import Coletor, auditar, renderizar_markdown, resumir
 
 BASELINE = os.path.join(os.path.dirname(__file__), "baseline.yaml")
 
@@ -28,6 +32,8 @@ class SSHFalso:
     def executar(self, cmd: str) -> tuple[str, int]:
         for prefixo, resposta in self._respostas.items():
             if cmd.startswith(prefixo):
+                if isinstance(resposta, Exception):
+                    raise resposta
                 return resposta
         return CMD_NAO_ENCONTRADO
 
@@ -71,12 +77,26 @@ HOST_SEM_SYSTEMD_SEM_SS = {
 }
 
 
-def rodar(respostas: dict) -> dict[tuple, dict]:
+def carregar_baseline() -> dict:
     with open(BASELINE) as f:
-        baseline = yaml.safe_load(f)
+        return yaml.safe_load(f)
+
+
+def coletar(respostas: dict) -> tuple[dict, list[dict]]:
+    baseline = carregar_baseline()
     dados = Coletor(SSHFalso(respostas)).coletar_tudo("10.0.0.5")
-    conformidade = auditar(baseline, dados)
-    return conformidade
+    dados["_baseline_versao"] = baseline.get("versao", 1)
+    return dados, auditar(baseline, dados)
+
+
+def rodar(respostas: dict) -> list[dict]:
+    return coletar(respostas)[1]
+
+
+def entrada(conformidade: list[dict], regra: str) -> dict:
+    achadas = [c for c in conformidade if c["regra"] == regra]
+    assert len(achadas) == 1, f"{regra}: {len(achadas)} entradas"
+    return achadas[0]
 
 
 def vereditos(conformidade: list[dict], regra: str) -> set[str]:
@@ -158,6 +178,130 @@ class TestHostSaudavel(unittest.TestCase):
         conf = rodar(respostas)
         self.assertEqual(vereditos(conf, "portas_em_escuta.somente_rede_interna"), {"desvio"})
         self.assertEqual(vereditos(conf, "portas_em_escuta.publicas_permitidas"), {"desvio"})
+
+
+N_REGRAS = 11  # regras do baseline.yaml
+
+
+class TestUmaEntradaPorRegra(unittest.TestCase):
+    """Revisão 2: o enunciado pede uma entrada de conformidade por regra do baseline."""
+
+    def test_host_saudavel_tem_uma_entrada_por_regra(self):
+        conf = rodar(HOST_SAUDAVEL)
+        self.assertEqual(len(conf), N_REGRAS)
+        self.assertEqual(len({c["regra"] for c in conf}), N_REGRAS)
+
+    def test_host_minimo_tem_uma_entrada_por_regra(self):
+        self.assertEqual(len(rodar(HOST_SEM_SYSTEMD_SEM_SS)), N_REGRAS)
+
+    def test_resumo_soma_o_numero_de_regras(self):
+        r = resumir(rodar(HOST_SEM_SYSTEMD_SEM_SS))
+        self.assertEqual(r["conforme"] + r["desvio"] + r["nao_verificado"], N_REGRAS)
+
+    def test_servicos_ausentes_agregados_numa_entrada(self):
+        respostas = dict(HOST_SAUDAVEL)
+        respostas["systemctl list-units --type=service"] = (
+            "ssh.service loaded active running OpenSSH\n"
+            "chrony.service loaded active running chrony", 0)
+        e = entrada(rodar(respostas), "servicos.ativos")
+        self.assertEqual(e["veredito"], "desvio")
+        self.assertEqual(e["severidade"], "alto")
+        self.assertEqual(e["encontrado"], "ausente: containerd, node_exporter")
+
+    def test_servico_proibido_ativo_agregado(self):
+        respostas = dict(HOST_SAUDAVEL)
+        respostas["systemctl list-units --type=socket"] = ("telnet.socket loaded active listening telnet", 0)
+        e = entrada(rodar(respostas), "servicos.proibidos")
+        self.assertEqual(e["veredito"], "desvio")
+        self.assertEqual(e["encontrado"], "ativo: telnet.socket")
+
+    def test_porta_interna_exposta(self):
+        respostas = dict(HOST_SAUDAVEL)
+        respostas["ss -tlnp"] = ("LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:9100 0.0.0.0:*", 0)
+        e = entrada(rodar(respostas), "portas_em_escuta.somente_rede_interna")
+        self.assertEqual((e["veredito"], e["esperado"], e["encontrado"]),
+                         ("desvio", "9100 na rede interna", "9100 em 0.0.0.0"))
+
+
+class TestFalhaInesperadaIsolada(unittest.TestCase):
+    """Revisão 2: erro inesperado num item não derruba a execução."""
+
+    def test_timeout_no_ss_vira_nao_verificado_e_o_resto_segue(self):
+        respostas = dict(HOST_SAUDAVEL)
+        respostas["ss -tlnp"] = socket.timeout("timed out")
+        conf = rodar(respostas)
+        e = entrada(conf, "portas_em_escuta.publicas_permitidas")
+        self.assertEqual(e["veredito"], "nao_verificado")
+        self.assertEqual(e["motivo"], f"falha inesperada na coleta ({type(socket.timeout()).__name__})")
+        self.assertEqual(entrada(conf, "swap.habilitado")["veredito"], "conforme")
+        self.assertEqual(len(conf), N_REGRAS)
+
+
+class TestMarkdownNoFormatoDoEnunciado(unittest.TestCase):
+    def setUp(self):
+        dados, conf = coletar(HOST_SEM_SYSTEMD_SEM_SS)
+        self.md = renderizar_markdown(dados, conf)
+        self.linhas = self.md.splitlines()
+
+    def test_titulo_e_linha_de_coleta(self):
+        self.assertEqual(self.linhas[0], "# Inventário de vm-minima (10.0.0.5)")
+        self.assertRegex(self.linhas[1], r"^Coletado em \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC · baseline v1$")
+
+    def test_tabela_nao_verificado_com_duas_colunas(self):
+        self.assertIn("| Regra | Motivo |", self.linhas)
+        self.assertIn("| ssh.login_de_root | exige privilégio que o usuário da coleta não tem |", self.linhas)
+        self.assertNotIn("| Regra | Esperado | Motivo |", self.linhas)
+
+    def test_cada_regra_aparece_uma_vez_na_tabela(self):
+        linhas_nv = [l for l in self.linhas if l.startswith("| servicos.ativos |")]
+        self.assertEqual(len(linhas_nv), 1)
+
+
+class TestCodigosDeSaidaDaCli(unittest.TestCase):
+    """Executa a CLI de verdade: chave inexistente, endereço que não resolve, porta fechada."""
+
+    CLI = os.path.join(os.path.dirname(__file__), "inventario.py")
+
+    @classmethod
+    def setUpClass(cls):
+        import paramiko
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.chave = os.path.join(cls.tmp.name, "id_teste")
+        paramiko.Ed25519Key  # garante que a lib carrega
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", cls.chave], check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def rodar_cli(self, *args):
+        return subprocess.run([sys.executable, self.CLI, "--baseline", BASELINE, *args],
+                              capture_output=True, text=True, timeout=60)
+
+    def test_chave_inexistente_e_erro_de_uso(self):
+        r = self.rodar_cli("--host", "127.0.0.1", "--user", "x", "--key", "/nao/existe/id_ed25519")
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("arquivo da chave", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_endereco_que_nao_resolve(self):
+        r = self.rodar_cli("--host", "host-que-nao-existe.invalid", "--user", "x", "--key", self.chave)
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("não resolve", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_porta_fechada(self):
+        r = self.rodar_cli("--host", "127.0.0.1", "--porta", "1", "--user", "x", "--key", self.chave)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("conexão recusada", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_conteudo_da_chave_nunca_aparece(self):
+        conteudo = open(self.chave).read().splitlines()[1]
+        r = self.rodar_cli("--host", "127.0.0.1", "--porta", "1", "--user", "x", "--key", self.chave)
+        self.assertNotIn(conteudo, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":
